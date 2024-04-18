@@ -33,6 +33,7 @@ const server = http.createServer(async function (req, res) {
 		const parts = url.parse(req.url, true);
 		const query = parts.query;
 		let max = query.max || 1;
+		max = Number(max);
 		let body = [];
 
 		while (max--) {
