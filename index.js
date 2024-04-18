@@ -33,13 +33,14 @@ const server = http.createServer(async function (req, res) {
 		const parts = url.parse(req.url, true);
 		const query = parts.query;
 		let max = query.max || 1;
-		let body = "";
+		let body = [];
 
 		while (max--) {
 			const line = rl.next();
 			if (line !== false) {
 				line_position += 1;
-				body += `${line}\n`;
+				body.push(line);
+				body.push("\n");
 			} else {
 				// Loop the queue back around to the top in case some items failed
 				back_to_top();
@@ -50,6 +51,6 @@ const server = http.createServer(async function (req, res) {
 	
 		write_line_position();
 
-		res.end(body);
+		res.end(body.join(""));
 	}
 }).listen(31417);
