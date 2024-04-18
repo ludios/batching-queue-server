@@ -28,7 +28,7 @@ function back_to_top() {
 
 const server = http.createServer(async function (req, res) {
 	if (req.method === "GET") {
-		res.writeHead(200, { "Content-Type": "text/html" });
+		res.writeHead(200, { "Content-Type": "text/plain" });
 
 		const parts = url.parse(req.url, true);
 		const query = parts.query;
