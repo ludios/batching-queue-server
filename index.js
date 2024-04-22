@@ -6,6 +6,10 @@ const url = require("node:url");
 
 const item_file = process.argv[2];
 const position_file = process.argv[3];
+let port = 31417;
+if (process.env.PORT) {
+	port = Number(process.env.PORT);
+}
 
 let rl = new readlines.LineByLine(item_file);
 let line_position = 0;
@@ -54,4 +58,4 @@ const server = http.createServer(async function (req, res) {
 
 		res.end(body.join(""));
 	}
-}).listen(31417);
+}).listen(port);
