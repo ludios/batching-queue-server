@@ -30,7 +30,7 @@ function back_to_top() {
 	rl = new readlines.LineByLine(item_file);
 }
 
-const server = http.createServer(async function (req, res) {
+const server = http.createServer(async (req, res) => {
 	if (req.method === "GET") {
 		res.writeHead(200, { "Content-Type": "text/plain" });
 
@@ -38,7 +38,7 @@ const server = http.createServer(async function (req, res) {
 		const query = parts.query;
 		let max = query.max || 1;
 		max = Number(max);
-		let body = [];
+		const body = [];
 
 		while (max--) {
 			const line = rl.next();
