@@ -10,6 +10,10 @@ let port = 31417;
 if (process.env.PORT) {
 	port = Number(process.env.PORT);
 }
+let cycle = true;
+if (process.env.CYCLE === "false") {
+	cycle = false;
+}
 
 let rl = new readlines.LineByLine(item_file);
 let line_position = 0;
@@ -47,8 +51,10 @@ const server = http.createServer(async (req, res) => {
 				body.push(line);
 				body.push("\n");
 			} else {
-				// Loop the queue back around to the top in case some items failed
-				back_to_top();
+				if (cycle) {
+					// Loop the queue back around to the top in case some items failed
+					back_to_top();
+				}
 
 				break;
 			}
@@ -56,6 +62,13 @@ const server = http.createServer(async (req, res) => {
 	
 		write_line_position();
 
-		res.end(body.join(""));
+		if (body.length) {
+			res.end(body.join(""));
+		} else {
+			// Wait a bit to slow down clients who might have run out of items
+			setTimeout(() => {
+				res.end();
+			}, 1000);
+		}
 	}
 }).listen(port);
