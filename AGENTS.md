@@ -110,7 +110,7 @@ When there are multiple good ways to implement something, especially involving s
 
 # After making changes
 
-Never `git commit -a` because there may others working; stage changes manually.
+Never `git commit -a` because there may be others working; stage changes manually.
 
 Automatically commit your changes with this commit template:
 
