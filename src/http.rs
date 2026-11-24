@@ -1,20 +1,22 @@
 //! The HTTP interface: one handler, which hands out lines at one path.
 
-use crate::state::{Shared, State as ServerState};
+use crate::state::{self, Shared, State as ServerState};
 use anyhow::Result;
 use axum::Router;
 use axum::extract::{ConnectInfo, State};
-use axum::http::header::{ALLOW, CONTENT_TYPE};
-use axum::http::{Method, StatusCode, Uri};
+use axum::http::header::{ALLOW, CONTENT_TYPE, USER_AGENT};
+use axum::http::request::Parts;
+use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
+use jiff::Timestamp;
 use std::fmt;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
 /// How long a request waits before it is told that it gets no lines, so that clients that poll
-/// an empty queue or keep guessing the path are slowed down.
+/// an empty queue, keep hammering while blocked, or keep guessing the path are slowed down.
 pub const DELAY: Duration = Duration::from_secs(1);
 
 pub struct Config {
@@ -52,11 +54,14 @@ pub fn router(
 }
 
 /// The reply to one request.
+#[derive(Debug, PartialEq, Eq)]
 enum Reply {
+    Blocked,
     WrongPath,
     MethodNotAllowed,
     /// The `max` parameter is invalid, for the reason given.
     BadMax(&'static str),
+    Paused,
     /// Lines were handed out: each line followed by `\n`, and the number of lines (possibly 0).
     Lines(Vec<u8>, u64),
 }
@@ -65,11 +70,13 @@ impl fmt::Display for Reply {
     /// Writes the outcome of the request, as logged.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Reply::Blocked => write!(f, "blocked"),
             Reply::WrongPath => write!(f, "wrong path"),
             Reply::MethodNotAllowed => {
                 write!(f, "rejected {}", StatusCode::METHOD_NOT_ALLOWED.as_u16())
             }
             Reply::BadMax(_) => write!(f, "rejected {}", StatusCode::BAD_REQUEST.as_u16()),
+            Reply::Paused => write!(f, "paused"),
             Reply::Lines(_, lines) => write!(f, "{lines}"),
         }
     }
@@ -80,7 +87,8 @@ impl Reply {
     async fn respond(self) -> Response {
         let text_plain = [(CONTENT_TYPE, "text/plain")];
         match self {
-            Reply::WrongPath => {
+            // A stranger cannot tell these two apart
+            Reply::Blocked | Reply::WrongPath => {
                 tokio::time::sleep(DELAY).await;
                 StatusCode::FORBIDDEN.into_response()
             }
@@ -90,7 +98,8 @@ impl Reply {
             Reply::BadMax(reason) => {
                 (StatusCode::BAD_REQUEST, text_plain, format!("{reason}\n")).into_response()
             }
-            Reply::Lines(_, 0) => {
+            // As if the queue were empty, so that the clients just idle
+            Reply::Paused | Reply::Lines(_, 0) => {
                 tokio::time::sleep(DELAY).await;
                 (StatusCode::OK, text_plain).into_response()
             }
@@ -131,30 +140,39 @@ fn parse_max(query: Option<&str>) -> Result<u64, &'static str> {
     }
 }
 
-/// Decides the reply to a request, taking a batch if the reply hands out lines.
+/// Decides the reply to the request `request` from the client at `ip` (in its canonical form)
+/// at `now`, and records it. Takes a batch if the reply hands out lines.
 ///
 /// Returns None if the server has stopped handing out lines, or an error if reading the item
 /// file failed, after stopping the server.
 fn decide(
     state: &mut ServerState,
     config: &Config,
-    method: &Method,
-    uri: &Uri,
+    ip: IpAddr,
+    now: Timestamp,
+    request: &Parts,
 ) -> Result<Option<Reply>> {
     if state.is_stopped() {
         return Ok(None);
     }
-    if uri.path() != config.path {
+    let user_agent = request.headers.get(USER_AGENT).map(HeaderValue::as_bytes);
+    if state.record_request(ip, now, user_agent).blocked {
+        return Ok(Some(Reply::Blocked));
+    }
+    if request.uri.path() != config.path {
         return Ok(Some(Reply::WrongPath));
     }
-    if method != Method::GET {
+    if request.method != Method::GET {
         return Ok(Some(Reply::MethodNotAllowed));
     }
-    let max = match parse_max(uri.query()) {
+    let max = match parse_max(request.uri.query()) {
         Ok(max) => max,
         Err(reason) => return Ok(Some(Reply::BadMax(reason))),
     };
-    let batch = match state.take(max.min(config.max_batch)) {
+    if state.is_paused() {
+        return Ok(Some(Reply::Paused));
+    }
+    let batch = match state.take(ip, max.min(config.max_batch)) {
         Ok(batch) => batch,
         Err(error) => {
             state.stop();
@@ -167,13 +185,12 @@ fn decide(
 async fn handle(
     State(app): State<App>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    method: Method,
-    uri: Uri,
+    request: Parts,
 ) -> Response {
     let ip = peer.ip().to_canonical();
     let decided = {
         let mut state = app.shared.state.lock().unwrap();
-        decide(&mut state, &app.config, &method, &uri)
+        decide(&mut state, &app.config, ip, state::now(), &request)
     };
     let reply = match decided {
         Ok(Some(reply)) => reply,
@@ -192,8 +209,10 @@ async fn handle(
 mod tests {
     use super::*;
     use crate::queue::Queue;
+    use crate::state::Client;
     use axum::body::Body;
     use axum::http::{HeaderMap, Request};
+    use std::collections::BTreeMap;
     use std::fs;
     use tempfile::TempDir;
     use tokio::time::Instant;
@@ -214,7 +233,7 @@ mod tests {
         fs::write(&item_file, contents).unwrap();
         let queue = Queue::open(&item_file, 0, cycle).unwrap();
         let shared = Arc::new(Shared::new(
-            ServerState::new(queue, 0),
+            ServerState::new(queue, 0, BTreeMap::new()),
             dir.path().join("items.txt.bqs.json"),
         ));
         let (fatal, _) = tokio::sync::mpsc::unbounded_channel();
@@ -241,11 +260,31 @@ mod tests {
     impl TestServer {
         /// Sends a request with `method` for `target` (a path and a query string) from `ip`.
         async fn request(&self, ip: &str, method: Method, target: &str) -> TestResponse {
-            let mut request = Request::builder()
+            let request = Request::builder()
                 .method(method)
                 .uri(target)
                 .body(Body::empty())
                 .unwrap();
+            self.send(ip, request).await
+        }
+
+        /// Sends a GET request for `target` from `ip`, with a `User-Agent` header for each of
+        /// `user_agents`.
+        async fn get_with_user_agents(
+            &self,
+            ip: &str,
+            target: &str,
+            user_agents: &[&[u8]],
+        ) -> TestResponse {
+            let mut request = Request::builder().uri(target);
+            for user_agent in user_agents {
+                request = request.header(USER_AGENT, HeaderValue::from_bytes(user_agent).unwrap());
+            }
+            self.send(ip, request.body(Body::empty()).unwrap()).await
+        }
+
+        /// Sends `request` from `ip`.
+        async fn send(&self, ip: &str, mut request: Request<Body>) -> TestResponse {
             let peer = SocketAddr::new(ip.parse().unwrap(), 40000);
             request.extensions_mut().insert(ConnectInfo(peer));
             let start = Instant::now();
@@ -271,6 +310,22 @@ mod tests {
 
         fn position(&self) -> u64 {
             self.shared.state.lock().unwrap().queue.position()
+        }
+
+        fn client(&self, ip: &str) -> Client {
+            self.shared.state.lock().unwrap().clients[&ip.parse().unwrap()].clone()
+        }
+
+        fn set_blocked(&self, ip: &str, blocked: bool) {
+            self.shared
+                .state
+                .lock()
+                .unwrap()
+                .set_blocked(ip.parse().unwrap(), blocked);
+        }
+
+        fn set_paused(&self, paused: bool) {
+            self.shared.state.lock().unwrap().set_paused(paused);
         }
     }
 
@@ -437,5 +492,116 @@ mod tests {
         let response = tokio::time::timeout(Duration::from_secs(60), server.get("/")).await;
         assert!(response.is_err());
         assert_eq!(server.position(), 0);
+    }
+
+    const OTHER_IP: &str = "198.51.100.9";
+
+    #[tokio::test(start_paused = true)]
+    async fn a_blocked_client_gets_403_while_others_are_served() {
+        let server = server("a\nb\nc\n", "/", 10000, false);
+        assert_served(&server.request(OTHER_IP, Method::GET, "/").await, "a\n");
+        server.set_blocked(OTHER_IP, true);
+        for (method, target) in [
+            (Method::GET, "/"),
+            (Method::HEAD, "/"),
+            (Method::GET, "/?max=0"),
+        ] {
+            assert_forbidden(&server.request(OTHER_IP, method, target).await);
+        }
+        assert_served(&server.get("/").await, "b\n");
+        server.set_blocked(OTHER_IP, false);
+        assert_served(&server.request(OTHER_IP, Method::GET, "/").await, "c\n");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_paused_server_hands_out_no_lines() {
+        let server = server("a\nb\n", "/secret", 10000, false);
+        assert_served(&server.get("/secret").await, "a\n");
+        server.request(OTHER_IP, Method::GET, "/secret?max=0").await;
+        server.set_blocked(OTHER_IP, true);
+        server.set_paused(true);
+
+        assert_served(&server.get("/secret?max=2").await, "");
+        assert_eq!(server.position(), 1);
+        // The rows above "paused" in the table still apply
+        assert_forbidden(&server.request(OTHER_IP, Method::GET, "/secret").await);
+        assert_forbidden(&server.get("/").await);
+        let head = server.request("203.0.113.7", Method::HEAD, "/secret").await;
+        assert_eq!(head.status, StatusCode::METHOD_NOT_ALLOWED);
+        assert_bad_max(&server.get("/secret?max=0").await, INVALID_MAX);
+        assert_eq!(server.position(), 1);
+
+        server.set_paused(false);
+        assert_served(&server.get("/secret?max=2").await, "b\n");
+    }
+
+    #[tokio::test]
+    async fn blocked_comes_before_wrong_path() {
+        let server = server("a\n", "/", 10000, false);
+        let ip = OTHER_IP.parse().unwrap();
+        let config = Config {
+            path: "/".to_owned(),
+            max_batch: 10000,
+        };
+        let (request, ()) = Request::builder()
+            .method(Method::POST)
+            .uri("/wrong?max=0")
+            .body(())
+            .unwrap()
+            .into_parts();
+        let mut state = server.shared.state.lock().unwrap();
+        let decided = decide(&mut state, &config, ip, state::now(), &request).unwrap();
+        assert_eq!(decided, Some(Reply::WrongPath));
+        state.set_blocked(ip, true);
+        let decided = decide(&mut state, &config, ip, state::now(), &request).unwrap();
+        assert_eq!(decided, Some(Reply::Blocked));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn clients_are_counted() {
+        let server = server("a\nb\nc\n", "/", 10000, false);
+        let ip = "203.0.113.7";
+        let before = state::now();
+        assert_served(
+            &server.get_with_user_agents(ip, "/?max=2", &[b"one"]).await,
+            "a\nb\n",
+        );
+        assert_forbidden(&server.get("/wrong").await);
+        server.request(ip, Method::POST, "/").await;
+        server.get("/?max=0").await;
+        assert_served(
+            &server.get_with_user_agents(ip, "/?max=5", &[b"two"]).await,
+            "c\n",
+        );
+        assert_served(&server.get("/").await, "");
+        let after = state::now();
+
+        let client = server.client(ip);
+        assert_eq!((client.items, client.requests), (3, 6));
+        assert_eq!(client.user_agent.as_deref(), Some("two"));
+        assert!(!client.blocked);
+        assert!(before <= client.first_seen, "{before} {client:?}");
+        assert!(client.first_seen <= client.last_seen, "{client:?}");
+        assert!(client.last_seen <= after, "{after} {client:?}");
+
+        // An IPv4-mapped IPv6 address is the same client
+        server
+            .request("::ffff:203.0.113.7", Method::GET, "/wrong")
+            .await;
+        assert_eq!(server.client(ip).requests, 7);
+        assert_eq!(server.shared.state.lock().unwrap().clients.len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn user_agents_are_stored_without_control_characters() {
+        let server = server("a\n", "/", 10000, false);
+        let user_agents: [&[u8]; 2] = [b"a\tb\xc2\x9bc\xffd", b"second"];
+        server
+            .get_with_user_agents(OTHER_IP, "/", &user_agents)
+            .await;
+        assert_eq!(
+            server.client(OTHER_IP).user_agent.as_deref(),
+            Some("a?b?c\u{fffd}d")
+        );
     }
 }

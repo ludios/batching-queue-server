@@ -128,7 +128,8 @@ fn start(args: &Args) -> Result<Server> {
     let listener = bind(args.port)?;
 
     let total = queue.total();
-    let shared = Arc::new(Shared::new(State::new(queue, loaded.wraps), state_file));
+    let state = State::new(queue, loaded.wraps, loaded.clients);
+    let shared = Arc::new(Shared::new(state, state_file));
     shared.save()?;
 
     let cycling = if args.cycle { "on" } else { "off" };
@@ -420,7 +421,10 @@ mod tests {
         let moved = args.item_file.with_extension("moved");
         fs::rename(&args.item_file, &moved).unwrap();
         let error = start_error(&args);
-        assert!(error.contains("a running server is using the state file"), "{error}");
+        assert!(
+            error.contains("a running server is using the state file"),
+            "{error}"
+        );
         fs::rename(&moved, &args.item_file).unwrap();
         assert_eq!(fs::read_to_string(args.state_file()).unwrap(), saved);
         assert_eq!(first.get("/").await, (200, "b\n".to_owned()));
@@ -439,6 +443,11 @@ mod tests {
         let head = "HEAD / HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n";
         assert_eq!(server.send(head).await.0, 405);
         assert_eq!(server.get("/?max=5").await, (200, "b\n".to_owned()));
+        server.exit().await.unwrap();
+
+        let clients = state::load(&args.state_file()).unwrap().unwrap().clients;
+        let client = &clients[&"127.0.0.1".parse().unwrap()];
+        assert_eq!((clients.len(), client.requests, client.items), (1, 3, 2));
     }
 
     #[tokio::test]
