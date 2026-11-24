@@ -2,7 +2,7 @@
 
 ## Goal
 
-`batching-queue-server` hands out the lines of one text file to HTTP clients, in file order, a batch per request. Today it is a short Node script ([index.js](index.js)) plus a vendored line reader ([readlines.js](readlines.js)). It knows nothing about who took what.
+`batching-queue-server` hands out the lines of one text file to HTTP clients, in file order, a batch per request. Before the port, it was a short Node script (`index.js`) plus a vendored line reader (`readlines.js`), which were removed after commit 24e616cf1c82 (see `git show 24e616cf1c82:index.js`). It knew nothing about who took what.
 
 Replace it with a single Rust binary that:
 
@@ -12,7 +12,7 @@ Replace it with a single Rust binary that:
 4. Shows all of this in a compact terminal dashboard (TUI) drawn by the server process itself. The operator runs many instances, each in its own small terminal window, so every row of the screen matters.
 5. Keeps the block list and the per-IP numbers across restarts.
 
-The operator will read and maintain this code. Prefer the plainest design that meets the spec: few modules, few types, no cleverness. Read [index.js](index.js) first; it is short.
+The operator will read and maintain this code. Prefer the plainest design that meets the spec: few modules, few types, no cleverness. Read `index.js` (`git show 24e616cf1c82:index.js`) first; it is short.
 
 ## Decisions already made by the operator (do not reopen)
 
@@ -166,7 +166,7 @@ The dashboard shows the reverse DNS name (the PTR record) of each client IP, as 
 - At most 8 lookups run at the same time; further ones wait their turn, for as long as that takes. A lookup is given up 5 seconds after it started running (not 5 seconds after it began to wait).
 - Use the resolver configuration of the system (`/etc/resolv.conf`).
 - If the resolver cannot be set up (for example because `/etc/resolv.conf` is missing), that is not an error: the server runs, and every client that would be looked up counts as looked up without a name.
-- The result is the target name of the first `PTR` record in the answer, in hickory's ASCII form (`Name::to_ascii`), without its final `.`. Skip records of every other type; an answer can contain a `CNAME` record before the `PTR` record. A result that is empty counts as no name. The ASCII form keeps internationalized labels as `xn--…`, and escapes every other byte that is not a letter, a digit, `-`, or `_`: as `\` and the byte if it is printable (`\[`), or else as `\` and three octal digits (`\033` for ESC). So each `char` of it takes one screen column. The owner of the reverse zone controls this name, and it is drawn on the operator's terminal, so also replace each control character in it with `?`, as in a `User-Agent` value; the ASCII form doesn't have any, but this keeps the terminal safe whatever that form becomes. Don't cut it to its first 200 `char`s, as a `User-Agent` value is cut: if it is longer than 255 `char`s, keep its last 255, because the domain is at the end.
+- The result is the target name of the first `PTR` record in the answer, in hickory's ASCII form (`Name::to_ascii`), without its final `.`. Skip records of every other type; an answer can contain a `CNAME` record before the `PTR` record. A result that is empty counts as no name. The ASCII form keeps internationalized labels as `xn--…`, and escapes unusual characters in the style of a DNS zone file: as `\` and the character (`\[`), or as `\` and its byte in three octal digits (`\033` for ESC). So each `char` of it takes one screen column. The owner of the reverse zone controls this name, and it is drawn on the operator's terminal, so also replace each control character in it with `?`, as in a `User-Agent` value; the ASCII form doesn't have any, but this keeps the terminal safe whatever that form becomes. Don't cut it to its first 200 `char`s, as a `User-Agent` value is cut: if it is longer than 255 `char`s, keep its last 255, because the domain is at the end.
 - So a client is in one of three states: not looked up yet; looked up, with a name; looked up, without a name (no `PTR` record, an error, or given up).
 - Names are kept in memory only. They are not saved in the state file.
 - Without a dashboard, do no lookups.
@@ -503,7 +503,7 @@ Required, at minimum:
 ## Deliverables
 
 1. The Rust crate at the repository root, with its `Cargo.lock` committed, building without warnings and passing `cargo clippy` and `cargo test`.
-2. `README.md`: what the server does, how to run it, the HTTP contract, the state file, its lock file (it is permanent and empty, it is never stale, and it must not be deleted while a server runs) with the limits named in "Lock file", the dashboard keys, that reverse DNS names are not verified, that the lookups send client IPs to the system's DNS resolver, and that the `--path` value is visible to other users of the machine in the process list. The repository has no README today. Include a section "Moving from the Node version": replace the environment variable `PORT` with `--port`; add `--cycle` unless the old launch set `CYCLE=false`, because cycling is now off by default; remove `CYCLE`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
+2. `README.md`: what the server does, how to run it, the HTTP contract, the state file, its lock file (it is permanent and empty, it is never stale, and it must not be deleted while a server runs) with the limits named in "Lock file", the dashboard keys, that reverse DNS names are not verified, that the lookups send client IPs to the system's DNS resolver, and that the `--path` value is visible to other users of the machine in the process list. Include a section "Moving from the Node version": replace the environment variable `PORT` with `--port`; add `--cycle` unless the old launch set `CYCLE=false`, because cycling is now off by default; remove `CYCLE`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
 3. Removal of `index.js`, `readlines.js`, `package.json`, and `LICENSE`. That `LICENSE` file is the license of the vendored `readlines.js` only. Do not add a license for the Rust crate; the operator has not chosen one.
 4. `.gitignore` with `target/`.
 

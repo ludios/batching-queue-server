@@ -43,9 +43,9 @@ fn host_from_answer(answer: &[Record]) -> Host {
     let Some(name) = name else {
         return Host::NoName;
     };
-    // The ASCII form keeps internationalized labels as `xn--…` and escapes every other byte
-    // that is not a letter, a digit, `-`, or `_`: as `\` and the byte if it is printable, or
-    // else as `\` and three octal digits. So each `char` takes one screen column.
+    // The ASCII form keeps internationalized labels as `xn--…` and escapes unusual characters
+    // in the style of a DNS zone file: as `\` and the character (`\[`), or as `\` and its byte
+    // in three octal digits (`\033`). So each `char` takes one screen column.
     let ascii = name.to_ascii();
     let ascii = ascii.strip_suffix('.').unwrap_or(&ascii);
     // Doesn't change the ASCII form, but keeps the terminal safe whatever that form becomes
