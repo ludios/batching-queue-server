@@ -12,6 +12,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use state::{Shared, State};
 use std::fs::{self, File};
 use std::net::{Ipv6Addr, SocketAddr};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -75,10 +76,11 @@ impl Args {
     }
 }
 
-/// Whether `a` and `b` are paths of the same existing file.
+/// Whether `a` and `b` are paths of the same existing file, also through a symlink or a hard
+/// link.
 fn same_file(a: &Path, b: &Path) -> bool {
-    match (fs::canonicalize(a), fs::canonicalize(b)) {
-        (Ok(a), Ok(b)) => a == b,
+    match (fs::metadata(a), fs::metadata(b)) {
+        (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
         _ => false,
     }
 }
@@ -114,8 +116,13 @@ struct Server {
 /// Does the startup checks, loads the state, binds the port, and saves the state once.
 fn start(args: &Args) -> Result<Server> {
     let state_file = args.state_file();
-    let lock_file = state::lock_path(&state_file);
-    for (name, path) in [("state file", &state_file), ("lock file", &lock_file)] {
+    // The server writes these files (the temporary one at every save)
+    let own_files = [
+        ("state file", state_file.clone()),
+        ("lock file", state::lock_path(&state_file)),
+        ("temporary state file", state::temporary_path(&state_file)),
+    ];
+    for (name, path) in &own_files {
         if same_file(path, &args.item_file) {
             bail!("the {name} {} is the item file", path.display());
         }
@@ -378,17 +385,23 @@ mod tests {
         fs::create_dir(&state_file).unwrap();
         assert!(start_error(&args).contains("cannot read the state file"));
 
-        args.state_file = Some(args.item_file.clone());
-        assert!(start_error(&args).contains("is the item file"));
-        assert_eq!(fs::read_to_string(&args.item_file).unwrap(), "a\nb\n");
-
-        let lock_named_like_the_item_file = dir.path().join("items");
-        fs::rename(&args.item_file, dir.path().join("items.lock")).unwrap();
-        args.item_file = dir.path().join("items.lock");
-        args.state_file = Some(lock_named_like_the_item_file);
-        assert!(start_error(&args).contains("the lock file"));
-        assert!(start_error(&args).contains("is the item file"));
-        assert_eq!(fs::read_to_string(&args.item_file).unwrap(), "a\nb\n");
+        // A state file "items" has the lock file "items.lock" and the temporary file "items.tmp"
+        let hard_link = dir.path().join("hard-link");
+        fs::hard_link(&args.item_file, &hard_link).unwrap();
+        for (state_file, item_file, name) in [
+            ("items.txt", "items.txt", "the state file"),
+            ("hard-link", "items.txt", "the state file"),
+            ("items", "items.lock", "the lock file"),
+            ("items", "items.tmp", "the temporary state file"),
+        ] {
+            fs::rename(&args.item_file, dir.path().join(item_file)).unwrap();
+            args.item_file = dir.path().join(item_file);
+            args.state_file = Some(dir.path().join(state_file));
+            let message = start_error(&args);
+            assert!(message.contains(&format!("{name} ")), "{message}");
+            assert!(message.contains("is the item file"), "{message}");
+            assert_eq!(fs::read_to_string(&args.item_file).unwrap(), "a\nb\n");
+        }
 
         args.state_file = Some(dir.path().join("missing").join("state.json"));
         assert!(start_error(&args).contains("cannot open the lock file"));

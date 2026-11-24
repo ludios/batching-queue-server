@@ -124,6 +124,11 @@ pub fn lock_path(path: &Path) -> PathBuf {
     with_suffix(path, ".lock")
 }
 
+/// Returns the path of the temporary file that a save of the state file at `path` writes.
+pub fn temporary_path(path: &Path) -> PathBuf {
+    with_suffix(path, ".tmp")
+}
+
 /// The state behind the mutex in `Shared`.
 pub struct State {
     pub queue: Queue,
@@ -353,7 +358,7 @@ pub fn load(path: &Path) -> Result<Option<Loaded>> {
 /// loss the file holds either its old contents or `contents`. The new file gets the permissions
 /// of the old one. On failure, no temporary file is left behind.
 fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
-    let temporary = with_suffix(path, ".tmp");
+    let temporary = temporary_path(path);
     let directory = match path.parent() {
         Some(parent) if parent != OsStr::new("") => parent,
         _ => Path::new("."),
