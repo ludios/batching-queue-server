@@ -61,10 +61,6 @@ Always let the user know about any discovered opportunities for simplification.
 
 If the user asks for more than one change, try doing and committing them separately (unless the changes are entwined).
 
-# Working with Node projects
-
-npm sux; please use pnpm instead.
-
 # There's plenty of time
 
 If more external information is needed, think and keep iterating on web search queries to thoroughly check things. Tips: try site-specific searches e.g. site:github.com, reddit.com, news.ycombinator.com; try combinations of quoted items. In addition to the Web Search tool, search Kagi using the query pattern in ~/.cache/passwords/kagi
@@ -79,43 +75,26 @@ If you're Claude, you can also ask Astra to rewrite stuff, with the `codex exec`
 
 # Code conventions
 
-For JavaScript, TypeScript, and Svelte-related code:
+For Rust code:
 
-- Use tabs to indent and spaces to align.
-- `snake_case` function names and local variables, except those imported from external libraries or in the platform itself.
-- Use semicolons after statements; no ASI.
+- No useless use of tuple: `let (size, frame_size) = (self.size, self.frame_size);` should be two lines instead.
+- It's okay to keep things simple; no need to use combinators like `and_then` unless they're ideal.
+- Bodies of e.g. `if` / `else` expressions should be on their own lines unless they are very simple.
+- Prefer e.g. `let mut x = None` followed by `x = ...` over a `match` with a None or more lines.
+- Prefer `if let ` / `let ... else {` where it results in fewer lines than `match`.
 
-When writing _any_ kind of code, including for the above:
+When writing _any_ kind of code:
 
 - Think about invariants and add asserts or domain-specific errors where they might prevent misbehavior.
 - Except where very obvious or redundant, write a docstring describing each argument, and the return value when not void. What do they really represent?
 - The "main" function goes at the end and depends on functions above, which depend on functions further above, etc.
 - Scan the functions and generalize if that makes a good result; evict any deadbeats: humans with a small context window need to review and maintain this code.
 - Abstraction boundaries are important. Comments should reflect the current abstraction and generally avoid talking about other things.
-- Classes should be used when:
-
-	1. You have anything like a state machine, or functions closing over the same state. \
-	   They help us organize and know which state is shared between related functions.
-	2. Integrating with an API properly, e.g. making an Error subclass.
-
-  Otherwise, plain functions are generally fine.
 
 Minutiae:
 
-- Use the { } curlies even for one-statement blocks.
-- Block contents should not be on the same line that opened the block.
-- Put `return`, `continue`, `break`, `throw`, `yield`, `await` statements on their own line so that they're obvious.
 - Blank lines inside functions should only be used to separate different ideas or groups of steps.
 - Use space-based alignment but only where it looks good: on adjacent lines with a very similar structure, add spaces after shorter identifiers (or the syntax to the right of them) to align things.
-
-# Libraries to use
-
-- `ayy` to assert things (when it's okay to throw `AssertionError` instead of a domain-specific error).
-	- Always use the most specific assertion function, so that the error message shows the unexpected value when possible.
-		- e.g. `A.gte(x, 1); A.lte(x, 3)` instead of `A(x >= 1 && x <= 3);`
-- `logtape` for logging. Logs teach us about anomalies and the causes of things; log what a human operator would probably be interested in when observing the system.
-- `vitest` for unit tests. Writing more tests is fine.
-- `fast-check` for property-based testing where needed, i.e. to check a bunch of variations on a string or number.
 
 # Thoughts for when there is programming involved
 
