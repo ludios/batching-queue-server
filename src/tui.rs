@@ -418,8 +418,6 @@ struct Drawn {
     page: usize,
     /// Every client IP address, in the order of the table.
     order: Vec<IpAddr>,
-    /// The selected client, and whether it was blocked.
-    selected: Option<(IpAddr, bool)>,
     /// The screen row of the key bar, if it was drawn.
     key_bar_y: Option<u16>,
     /// The labels of the key bar: their screen columns and their keys.
@@ -451,7 +449,8 @@ struct Dashboard {
     config: Config,
     /// The time zone of the event times.
     time_zone: TimeZone,
-    /// The selected client. With no clients, nothing is selected.
+    /// The selected client. With no clients, nothing is selected. Changes only through inputs,
+    /// each of which is followed by a frame, and so is the client highlighted in `drawn`.
     selected: Option<IpAddr>,
     /// The index of the first client row that is drawn.
     scroll: usize,
@@ -576,7 +575,6 @@ impl Dashboard {
         }
         let selected = rows.iter().position(|row| Some(row.ip) == self.selected);
         self.drawn.order = rows.iter().map(|row| row.ip).collect();
-        self.drawn.selected = selected.map(|i| (rows[i].ip, rows[i].client.blocked));
         self.drawn.table = area.y..area.bottom();
         if area.is_empty() {
             return;
@@ -723,9 +721,14 @@ impl Dashboard {
             return None;
         }
         match key.code {
+            // Only a selected client that the operator can see
             KeyCode::F(9) | KeyCode::Char('b') => {
-                let (ip, blocked) = self.drawn.selected?;
-                Some(Action::SetBlocked(ip, !blocked))
+                let row = self
+                    .drawn
+                    .rows
+                    .iter()
+                    .find(|row| Some(row.ip) == self.selected)?;
+                Some(Action::SetBlocked(row.ip, !row.blocked))
             }
             KeyCode::F(6) | KeyCode::Char('s') => Some(Action::SortByNext),
             KeyCode::F(7) | KeyCode::Char('i') => Some(Action::InvertSort),
@@ -757,7 +760,7 @@ impl Dashboard {
             placed.column == Column::Blocked
                 && usize::from(x - placed.x) < block_label(row.blocked).len()
         });
-        if on_label && drawn.selected.map(|(ip, _)| ip) == Some(row.ip) {
+        if on_label && self.selected == Some(row.ip) {
             return Some(Action::SetBlocked(row.ip, !row.blocked));
         }
         Some(Action::Select(row.ip))
@@ -1343,6 +1346,17 @@ mod tests {
             test.input(Input::Key(KeyEvent::new(KeyCode::Char('b'), modifiers)));
             assert!(!test.is_blocked(B));
         }
+    }
+
+    #[test]
+    fn a_client_that_is_not_drawn_is_not_blocked_by_key() {
+        let mut test = Test::new(10, false, View::default(), &three_clients());
+        // Room for the header of the clients table, but for none of its rows
+        test.terminal = Terminal::new(TestBackend::new(100, 3)).unwrap();
+        test.draw();
+        assert_eq!(test.dashboard.selected, Some(A));
+        test.press(KeyCode::F(9));
+        assert!(!test.is_blocked(A));
     }
 
     #[test]
