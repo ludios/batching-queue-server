@@ -169,11 +169,12 @@ pub enum Outcome {
     Blocked,
     WrongPath,
     Paused,
-    /// Rejected with this HTTP status code.
+    /// Rejected with this HTTP status code: 400 or 405.
     Rejected(u16),
 }
 
 impl fmt::Display for Outcome {
+    /// Writes the outcome as the dashboard and the log show it.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Outcome::Lines(lines) => write!(f, "{lines}"),
@@ -185,9 +186,10 @@ impl fmt::Display for Outcome {
     }
 }
 
-/// One request, as the dashboard lists it.
+/// One request and what came of it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Event {
+    /// When the outcome was decided, in whole seconds of the wall clock.
     pub time: Timestamp,
     /// The IP address of the client, in its canonical form.
     pub ip: IpAddr,
@@ -201,25 +203,35 @@ pub struct Counts {
     pub lines: u64,
 }
 
-/// The counts of the last `RATE_SECONDS` seconds, one per second.
+/// The counts of each second of tokio's clock (which does not jump, as the wall clock may), for
+/// the last `RATE_SECONDS` seconds.
 struct Rates {
-    /// The counts of each second, at the index of that second modulo `RATE_SECONDS`, with the
-    /// second (since the Unix epoch) they belong to.
-    seconds: [(i64, Counts); RATE_SECONDS],
+    /// The instant at which second 0 starts.
+    start: Instant,
+    /// At the index of each second modulo `RATE_SECONDS`: the most recent second with that index
+    /// that had a request, counted from `start`, and its counts. `u64::MAX`, which no second
+    /// reaches, marks an index that has had no request.
+    seconds: [(u64, Counts); RATE_SECONDS],
 }
 
 impl Rates {
-    fn new() -> Rates {
+    /// `start` is the instant at which second 0 starts.
+    fn new(start: Instant) -> Rates {
         Rates {
-            seconds: [(i64::MIN, Counts::default()); RATE_SECONDS],
+            start,
+            seconds: [(u64::MAX, Counts::default()); RATE_SECONDS],
         }
     }
 
-    /// Counts a request at `now` that handed out `lines` lines.
-    fn add(&mut self, now: Timestamp, lines: u64) {
-        let second = now.as_second();
-        let index = usize::try_from(second.rem_euclid(RATE_SECONDS as i64))
-            .expect("a remainder of a positive divisor is not negative");
+    /// Returns the second of `instant`, counted from `start`.
+    fn second(&self, instant: Instant) -> u64 {
+        instant.saturating_duration_since(self.start).as_secs()
+    }
+
+    /// Counts a request at `instant` that handed out `lines` lines.
+    fn add(&mut self, instant: Instant, lines: u64) {
+        let second = self.second(instant);
+        let index = usize::try_from(second % RATE_SECONDS as u64).expect("below RATE_SECONDS");
         let (counted_second, counts) = &mut self.seconds[index];
         if *counted_second != second {
             *counted_second = second;
@@ -229,10 +241,11 @@ impl Rates {
         counts.lines = counts.lines.saturating_add(lines);
     }
 
-    /// Returns the counts of the `RATE_SECONDS` seconds that end with the second of `now`.
-    fn sum(&self, now: Timestamp) -> Counts {
-        let last = now.as_second();
-        let first = last - (RATE_SECONDS as i64 - 1);
+    /// Returns the sums of the counts of the `RATE_SECONDS` seconds that end with the second of
+    /// `instant`.
+    fn sum(&self, instant: Instant) -> Counts {
+        let last = self.second(instant);
+        let first = last.saturating_sub(RATE_SECONDS as u64 - 1);
         let mut sum = Counts::default();
         for (second, counts) in &self.seconds {
             if (first..=last).contains(second) {
@@ -272,7 +285,7 @@ pub struct State {
     /// for each IP address that has made a request since.
     clients: BTreeMap<IpAddr, Client>,
     view: View,
-    /// The most recent requests, at most `MAX_EVENTS`, oldest first.
+    /// The most recent requests, at most `MAX_EVENTS`, in the order they were recorded.
     events: VecDeque<Event>,
     rates: Rates,
     /// Whether the operator has paused handing out lines.
@@ -301,7 +314,7 @@ impl State {
             clients,
             view,
             events: VecDeque::with_capacity(MAX_EVENTS),
-            rates: Rates::new(),
+            rates: Rates::new(Instant::now()),
             paused: false,
             stopped: false,
             dirty: false,
@@ -378,9 +391,16 @@ impl State {
         Ok(batch)
     }
 
-    /// Records what came of a request from `ip` (in its canonical form) at `now`, in the events
-    /// and in the rates.
-    pub fn record_outcome(&mut self, ip: IpAddr, now: Timestamp, outcome: Outcome) {
+    /// Records what came of a request from `ip` (in its canonical form), decided at `now` by the
+    /// wall clock and at `instant` by tokio's clock, in the events and in the rates.
+    pub fn record_outcome(
+        &mut self,
+        ip: IpAddr,
+        now: Timestamp,
+        instant: Instant,
+        outcome: Outcome,
+    ) {
+        assert_eq!(ip, ip.to_canonical(), "the IP address must be canonical");
         if self.events.len() == MAX_EVENTS {
             self.events.pop_front();
         }
@@ -394,7 +414,7 @@ impl State {
         } else {
             0
         };
-        self.rates.add(now, lines);
+        self.rates.add(instant, lines);
     }
 
     /// Returns a copy of what the state file holds, and counts the state as saved.
@@ -421,15 +441,16 @@ impl State {
         &self.clients
     }
 
-    /// Returns the most recent requests, oldest first.
+    /// Returns the most recent requests, at most `MAX_EVENTS`, in the order they were recorded,
+    /// oldest first.
     pub fn events(&self) -> &VecDeque<Event> {
         &self.events
     }
 
-    /// Returns the requests and the lines handed out in the last minute before `now`, give or
-    /// take a second.
-    pub fn last_minute(&self, now: Timestamp) -> Counts {
-        self.rates.sum(now)
+    /// Returns the numbers of requests, and of lines handed out, in the last 60 seconds of
+    /// tokio's clock up to `instant`, give or take a second.
+    pub fn last_minute(&self, instant: Instant) -> Counts {
+        self.rates.sum(instant)
     }
 
     pub fn view(&self) -> View {
@@ -746,11 +767,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn events_and_rates() {
+    #[tokio::test(start_paused = true)]
+    async fn events_and_rates() {
         let (_dir, shared) = setup(3);
         let mut state = shared.state.lock().unwrap();
-        let at = |second: i64| Timestamp::from_second(1_795_000_000 + second).unwrap();
+        // Tokio's clock is paused, so this is when the state was created
+        let start = Instant::now();
+        let at = |second: u64| start + Duration::from_secs(second);
+        let time = |second: u64| Timestamp::from_second(1_795_000_000 + second as i64).unwrap();
         // 10 requests in each of 150 seconds, every other one with 2 lines
         for i in 0..1500 {
             let outcome = if i % 2 == 0 {
@@ -758,20 +782,25 @@ mod tests {
             } else {
                 Outcome::Blocked
             };
-            state.record_outcome(IP, at(i / 10), outcome);
+            state.record_outcome(IP, time(i / 10), at(i / 10), outcome);
         }
         assert_eq!(state.events().len(), MAX_EVENTS);
-        assert_eq!(state.events()[0].time, at(50));
-        assert_eq!(state.events()[MAX_EVENTS - 1].time, at(149));
+        assert_eq!(state.events()[0].time, time(50));
+        assert_eq!(state.events()[MAX_EVENTS - 1].time, time(149));
 
         let counts = |requests, lines| Counts { requests, lines };
         assert_eq!(state.last_minute(at(149)), counts(600, 600));
         assert_eq!(state.last_minute(at(200)), counts(90, 90));
         assert_eq!(state.last_minute(at(300)), counts(0, 0));
-        // The clock jumped back: only seconds 90 to 100 are still counted
-        assert_eq!(state.last_minute(at(100)), counts(110, 110));
-        state.record_outcome(IP, at(-10), Outcome::Lines(5));
-        assert_eq!(state.last_minute(at(-10)), counts(1, 5));
+
+        // More requests in one second than events are kept: all of them are counted. The wall
+        // clock jumps back, which changes nothing but the times of the events.
+        for _ in 0..MAX_EVENTS + 1 {
+            state.record_outcome(IP, time(0), at(400), Outcome::Lines(1));
+        }
+        assert_eq!(state.last_minute(at(400)), counts(1001, 1001));
+        assert_eq!(state.events().len(), MAX_EVENTS);
+        assert_eq!(state.events()[0].time, time(0));
     }
 
     #[test]

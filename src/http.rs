@@ -13,6 +13,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::time::Instant;
 
 /// How long a request waits for its reply when the client is blocked, the path is wrong, the
 /// server is paused, or the queue has no line for it; this slows down clients that keep
@@ -48,6 +49,7 @@ enum Reply {
 }
 
 impl Reply {
+    /// Returns what came of the request, as recorded and logged.
     fn outcome(&self) -> Outcome {
         match self {
             Reply::Blocked => Outcome::Blocked,
@@ -178,7 +180,7 @@ async fn handle(
         let now = state::now();
         let decided = decide(&mut state, &app.config, ip, now, &request);
         if let Ok(Some(reply)) = &decided {
-            state.record_outcome(ip, now, reply.outcome());
+            state.record_outcome(ip, now, Instant::now(), reply.outcome());
         }
         decided
     };
@@ -639,7 +641,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            state.last_minute(state::now()),
+            state.last_minute(Instant::now()),
             state::Counts {
                 requests: 8,
                 lines: 3

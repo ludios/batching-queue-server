@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
+use tokio::time::Instant;
 
 /// The longest time between two frames.
 const FRAME_INTERVAL: Duration = Duration::from_millis(200);
@@ -105,12 +106,12 @@ struct Snapshot {
     requests_per_minute: u64,
 }
 
-/// Copies what a frame shows from the state in `shared` at `now`, with at most `events` events,
-/// and sorts the clients after releasing the state lock.
-fn snapshot(shared: &Shared, events: usize, now: Timestamp) -> Snapshot {
+/// Copies what a frame shows from the state in `shared` at `instant` of tokio's clock, with at
+/// most `events` events, and sorts the clients after releasing the state lock.
+fn snapshot(shared: &Shared, events: usize, instant: Instant) -> Snapshot {
     let mut snapshot = {
         let state = shared.state.lock().unwrap();
-        let last_minute = state.last_minute(now);
+        let last_minute = state.last_minute(instant);
         let all_events = state.events();
         Snapshot {
             position: state.queue().position(),
@@ -842,7 +843,8 @@ impl Dashboard {
             }
             let now = state::now();
             // No more events than rows fit on the screen
-            let snapshot = snapshot(shared, usize::from(terminal.size()?.height), now);
+            let height = usize::from(terminal.size()?.height);
+            let snapshot = snapshot(shared, height, Instant::now());
             terminal.draw(|frame| self.draw(frame.buffer_mut(), &snapshot, now))?;
             let new_title = self.title(&snapshot);
             if new_title != title {
@@ -1031,7 +1033,7 @@ mod tests {
         /// Draws a frame and returns its rows.
         fn draw(&mut self) -> Vec<String> {
             let height = self.terminal.size().unwrap().height;
-            let snapshot = snapshot(&self.shared, usize::from(height), now());
+            let snapshot = snapshot(&self.shared, usize::from(height), Instant::now());
             let dashboard = &mut self.dashboard;
             self.terminal
                 .draw(|frame| dashboard.draw(frame.buffer_mut(), &snapshot, now()))
@@ -1128,6 +1130,7 @@ mod tests {
             test.shared.state.lock().unwrap().record_outcome(
                 ip,
                 time("2026-11-24T11:59:59Z"),
+                Instant::now(),
                 outcome,
             );
         }
@@ -1527,7 +1530,7 @@ mod tests {
         let mut test = Test::new(3, false, View::default(), &clients);
         test.shared.state.lock().unwrap().set_blocked(B, true);
         let title = |test: &Test| {
-            let snapshot = snapshot(&test.shared, 10, now());
+            let snapshot = snapshot(&test.shared, 10, Instant::now());
             test.dashboard.title(&snapshot)
         };
         assert!(test.draw()[0].ends_with("  ETA -  0 items/min  0 req/min  3 IPs, 1 blocked"));
@@ -1536,7 +1539,8 @@ mod tests {
         {
             let mut state = test.shared.state.lock().unwrap();
             state.take(A, 1).unwrap();
-            state.record_outcome(A, time("2026-11-24T11:59:30Z"), Outcome::Lines(1));
+            let time = time("2026-11-24T11:59:30Z");
+            state.record_outcome(A, time, Instant::now(), Outcome::Lines(1));
         }
         assert!(
             test.draw()[0]
@@ -1556,7 +1560,9 @@ mod tests {
         for cycle in [false, true] {
             let mut test = Test::new(0, cycle, View::default(), &[]);
             let screen = test.draw();
-            let title = test.dashboard.title(&snapshot(&test.shared, 10, now()));
+            let title = test
+                .dashboard
+                .title(&snapshot(&test.shared, 10, Instant::now()));
             if cycle {
                 assert!(screen[0].starts_with("items.txt :31417  0/0 -  ETA -  "));
                 assert!(screen[0].ends_with("  wrap 0  0 IPs, 0 blocked"));
