@@ -47,19 +47,19 @@ Use `clap` (derive). Every setting of the server is an option; no setting is tak
 
 `ITEM_FILE` is the only positional argument; a second one is an argument error.
 
-Two servers that serve the same item file need different state files; give at least one of them `--state-file`. A server refuses to start while another running server uses the same state file (see "Lock file").
+Two servers that serve the same item file need different state files; give at least one of them `--state-file`. A server refuses to start while another running server uses the same state file path (see "Lock file").
 
 ### Startup order
 
-1. Parse the arguments. If the state file path and the item file path name the same existing file (compare them after `std::fs::canonicalize`), exit with an error.
-2. Open and scan the item file.
-3. Take the lock that belongs to the state file (see "Lock file").
-4. Load the state file (see "State file") and check it against the item file.
+1. Parse the arguments. If the state file path or the lock file path names the same existing file as the item file path (compare them after `std::fs::canonicalize`), exit with an error.
+2. Take the lock of the lock file (see "Lock file"). This comes before every slow or writing step, so that a second server is refused at once.
+3. Load the state file (see "State file").
+4. Open and scan the item file, and check that the loaded position is not greater than its number of lines.
 5. Bind the port, without accepting connections yet. Listen on the IPv6 wildcard address `[::]` at the `--port` value, for both IPv4 and IPv6. Do not rely on the system default for this: clear `IPV6_V6ONLY` on the socket explicitly (for example with the `socket2` crate). There is no fallback to IPv4 only.
 6. Save the state file once. This makes a state file location that cannot be written a startup error. Because it comes after every other check, a startup that fails changes nothing on disk, except that it may have created the empty lock file.
 7. Print one line to stderr that names the state file and says either which position was loaded from it or that it was newly created, and whether cycling is on. Then start the dashboard and accept connections.
 
-Argument errors are reported by `clap` in its usual way (its own message, exit status 2). Every other startup error (unreadable item file, state file in use by another server, invalid or unreadable state file, state file path that names the item file, state file that cannot be written, port that cannot be bound) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
+Argument errors are reported by `clap` in its usual way (its own message, exit status 2). Every other startup error (unreadable item file, lock file that cannot be opened or locked, state file in use by another server, invalid or unreadable state file, state file path that names the item file, state file that cannot be written, port that cannot be bound) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
 
 ## The item queue
 
@@ -91,7 +91,7 @@ The end of the file is reached only when an attempt to read a line finds none. A
 
 So a request that reaches the end of the file returns the lines it collected before the end (possibly none). With cycling off, the position stays at the end and every later batch is empty.
 
-All batches are taken one at a time under one lock. Within one run of the server, two requests must never receive the same line in the same pass, and lines are handed out in file order. (After a crash, some lines are handed out again; see "Saving".)
+All batches are taken one at a time while holding the state mutex (the one `std::sync::Mutex` around the shared state; not to be confused with the lock file). Within one run of the server, two requests must never receive the same line in the same pass, and lines are handed out in file order. (After a crash, some lines are handed out again; see "Saving".)
 
 The position advances when the batch is read, not when the client has received it. A client that disconnects before reading its response loses those lines; with cycling on they are handed out again in the next pass. This is accepted.
 
@@ -118,7 +118,7 @@ For each request, the first matching row applies:
 - `HEAD` on the right path from a client that is not blocked must get `405` and must not consume lines. Verified on docs.rs for axum 0.8.9: a route registered with `routing::get` is also called for `HEAD` requests. Register the handler so that this cannot happen, and test it.
 - The `Content-Type` value is exactly `text/plain`, with no `charset`, as in the Node version.
 - The 1 second delay slows down clients that poll an empty queue and clients that keep hammering while blocked. Waiting requests must not delay other requests.
-- The handler decides the outcome of a request in one step, while holding the state lock: it checks the rows of the table in order and, if none of the first five applies, takes the batch. A block, unblock, pause, or resume applies to every request whose decision comes after it. Requests already waiting out their delay finish as they started.
+- The handler decides the outcome of a request in one step, while holding the state mutex: it checks the rows of the table in order and, if none of the first five applies, takes the batch. A block, unblock, pause, or resume applies to every request whose decision comes after it. Requests already waiting out their delay finish as they started.
 - The operator can pause the server from the dashboard (see "Keys and mouse"). A paused server answers exactly as if the queue were empty, so clients just idle, and no line is handed out. The pause is not saved: a restart always starts unpaused.
 
 ### Differences from the Node version (all intended)
@@ -234,14 +234,16 @@ Timestamps are UTC in the RFC 3339 form shown. Counters and the position are uns
 
 Two servers writing the same state file would overwrite each other's position and block list. A lock file prevents this.
 
-- The lock file's path is the state file's path with `.lock` appended (`items.txt.bqs.json.lock`). It is empty.
-- At startup, before the state file is read, open the lock file, creating it if it does not exist, and try to take an exclusive advisory lock (`flock`) on it without waiting.
-- If another process holds the lock, exit with a startup error that says another server is using this state file, and names the state file.
-- Keep the lock file open, and so locked, until the process ends. The kernel then releases the lock, however the process ends, so a lock can never be left behind by a crash.
+- The lock file's path is the state file's path with `.lock` appended (`items.txt.bqs.json.lock`). The server never writes to it, so it stays empty.
+- At startup, before the state file is read, open the lock file, creating it if it does not exist, and try to take an exclusive advisory lock on it without waiting. Open it so that an existing file is never truncated (`OpenOptions` with `create(true)` and `truncate(false)`, not `File::create`).
+- If the lock is held (`TryLockError::WouldBlock`), exit with a startup error that names the state file and says that a running server is using it. The message must also say that the lock cannot be left over from a crash, so that nobody deletes the lock file to get past it.
+- Every other failure to open or lock the lock file is a startup error that names the lock file and shows the error of the operating system. Do not report it as "in use", and do not continue without the lock.
+- Keep the lock for as long as the server exists, until after its last save. In the binary that is until the process ends; in a test that runs a server inside the test process, until that server is dropped. The kernel releases the lock when the process ends, however it ends, so a crash cannot leave a lock behind.
 - Never delete the lock file, not at exit either: deleting it would let two servers lock two different files at the same path.
 - The lock file is locked, not the state file, because every save replaces the state file with a new file.
+- Limits, which the README must state: the lock belongs to the path as given, so two different paths to one state file (through a symlink) are not detected; and it is reliable only on a local filesystem.
 
-Use the file locking of the standard library (`File::try_lock`) if the Rust version in use has it; otherwise call `flock`.
+Use `File::try_lock` from the standard library.
 
 ### Loading at startup
 
@@ -255,10 +257,10 @@ There is no automatic conversion of a Node position file. The README explains ho
 
 ### Saving
 
-- Save by writing a temporary file in the same directory, calling `fsync` on it, renaming it over the state file, and calling `fsync` on the directory. Without these, a power loss can leave an empty state file, or the previous one, on some filesystems.
+- Save by writing a temporary file in the same directory, calling `fsync` on it, renaming it over the state file, and calling `fsync` on the directory. Without these, a power loss can leave an empty state file, or the previous one, on some filesystems. If a save fails, remove its temporary file.
 - Save once at startup (step 6 of "Startup order").
 - After that, save every 30 seconds if anything in the saved data changed since the last save; immediately when a block or unblock happens; immediately at each wrap; and at every clean exit (see "Exiting"). A changed view setting is a change like any other: it waits for the next of these saves. Measure the 30 seconds with tokio's clock, not with the wall clock, which may jump.
-- Every save is one consistent snapshot: the position, the wrap counter, the view settings, and every client record are from the same instant. Take the snapshot while holding the state lock; write it to disk after releasing that lock, so that a slow disk does not stall requests.
+- Every save is one consistent snapshot: the position, the wrap counter, the view settings, and every client record are from the same instant. Take the snapshot while holding the state mutex; write it to disk after releasing the mutex, so that a slow disk does not stall requests.
 - Two saves must never interleave, and an older snapshot must never overwrite a newer one.
 - Events, rates, and reverse DNS names are not saved.
 
@@ -469,9 +471,10 @@ Required, at minimum:
 **State file** (every test uses an item file in its own fresh temporary directory, because the default state file is written next to the item file)
 
 - Save and load round trip, including the position, the wrap counter, and view settings that all differ from the defaults. Missing file: position 0, no clients, and the default view settings. A file without `view`: the default view settings.
-- Startup errors: an empty file; damaged JSON; a wrong `version`; a missing field; a `view` with an unknown `sort_column`, with `"sort_column": "ua"`, without one of its four fields, or with a field of the wrong type; `"view": null`; an unknown field; a client without `user_agent`; a file holding only digits (a Node position file); a directory at the state file path; a `position` greater than the line count; `--state-file` naming the item file; a state file path whose parent directory does not exist (this is how to test "cannot be written"; a read-only directory is still writable for root).
+- Startup errors: an empty file; damaged JSON; a wrong `version`; a missing field; a `view` with an unknown `sort_column`, with `"sort_column": "ua"`, without one of its four fields, or with a field of the wrong type; `"view": null`; an unknown field; a client without `user_agent`; a file holding only digits (a Node position file); a directory at the state file path; a `position` greater than the line count; `--state-file` naming the item file; a state file path whose parent directory does not exist (the lock file cannot be created; do not test with a read-only directory, which is still writable for root); a lock file path that names the item file.
 - A startup that fails leaves an existing state file unchanged.
-- While one server runs, a second server with the same state file exits with a startup error and changes neither the state file nor the first server's behavior. After the first server has ended, in any way, a new server starts normally although the lock file still exists.
+- While one server runs, a second server with the same state file and a different `--port` exits with the "in use" startup error, without reading the item file and without changing the state file; the first server keeps serving. After the first server has ended, a new server starts normally although the lock file still exists. Test both endings: a clean exit, and a child process killed with `SIGKILL`.
+- A lock file that already has content is not truncated.
 - Through the whole server: hand out some lines, exit cleanly, start again with the same state file, and the next request continues with the next line; with `--cycle` and at least one wrap, the wrap counter is kept too. Without `--cycle`, a request after the last line gets an empty batch and the position stays at the end.
 - With paused time: after a hand-out, once 30 seconds have passed and the save that started then has finished, the file on disk holds the new position, without an exit. The file is not rewritten between two such saves, and not at all while nothing in the saved data changes. A change of a view setting alone, with no request, is on disk after the next 30 second save. After a block, an unblock, or a wrap, the file on disk holds the change without waiting for the 30 seconds.
 - A server without a dashboard that loads non-default view settings writes the same view settings in its saves.
@@ -500,7 +503,7 @@ Required, at minimum:
 ## Deliverables
 
 1. The Rust crate at the repository root, with its `Cargo.lock` committed, building without warnings and passing `cargo clippy` and `cargo test`.
-2. `README.md`: what the server does, how to run it, the HTTP contract, the state file and its lock file, the dashboard keys, that reverse DNS names are not verified, that the lookups send client IPs to the system's DNS resolver, and that the `--path` value is visible to other users of the machine in the process list. The repository has no README today. Include a section "Moving from the Node version": replace the environment variable `PORT` with `--port`; add `--cycle` unless the old launch set `CYCLE=false`, because cycling is now off by default; remove `CYCLE`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
+2. `README.md`: what the server does, how to run it, the HTTP contract, the state file, its lock file (it is permanent and empty, it is never stale, and it must not be deleted while a server runs) with the limits named in "Lock file", the dashboard keys, that reverse DNS names are not verified, that the lookups send client IPs to the system's DNS resolver, and that the `--path` value is visible to other users of the machine in the process list. The repository has no README today. Include a section "Moving from the Node version": replace the environment variable `PORT` with `--port`; add `--cycle` unless the old launch set `CYCLE=false`, because cycling is now off by default; remove `CYCLE`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
 3. Removal of `index.js`, `readlines.js`, `package.json`, and `LICENSE`. That `LICENSE` file is the license of the vendored `readlines.js` only. Do not add a license for the Rust crate; the operator has not chosen one.
 4. `.gitignore` with `target/`.
 
