@@ -43,7 +43,7 @@ fn open_at(path: &Path, position: u64) -> Result<(BufReader<File>, u64)> {
     }
     let Some(position_offset) = position_offset else {
         bail!(
-            "the position {position} is beyond the end of the item file {}, which has {count} lines",
+            "the position {position} is beyond the end of {}, which has {count} lines",
             path.display()
         );
     };
