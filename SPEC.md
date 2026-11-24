@@ -26,6 +26,7 @@ The operator will read and maintain this code. Prefer the plainest design that m
 - The clients table has a column with the reverse DNS name of each IP.
 - Sorting works like `htop`: click a column header, or use function keys.
 - Every setting is a command-line option. No environment variable is read.
+- Cycling is off unless `--cycle` is given. (In the Node version it was on by default.)
 
 ## Command line
 
@@ -37,15 +38,15 @@ batching-queue-server [OPTIONS] ITEM_FILE
 |---|---|---|
 | `--state-file FILE` | the `ITEM_FILE` path with `.bqs.json` appended | Where the state file is. For `/data/items.txt` the default is `/data/items.txt.bqs.json`, in the same directory as the item file. |
 | `--port PORT` | `31417` | TCP port to listen on. |
-| `--no-cycle` | cycling is on | Turn cycling off. With cycling on, the server starts again at the first line after the last line was handed out. With cycling off, it stops handing out lines at the end of the file. |
+| `--cycle` | cycling is off | Turn cycling on. With cycling off, the server stops handing out lines at the end of the file. With cycling on, it starts again at the first line after the last line was handed out. |
 | `--max-batch N` | `10000` | Upper limit on the number of lines in one response. Must be at least 1. |
 | `--path PATH` | `/` | The only request path at which lines are handed out; every other path gets `403`. A hard-to-guess value such as `/secretword` keeps strangers out. It must start with `/` and consist of printable ASCII characters other than space, `?`, and `#`; any other value is an argument error. |
 
 Use `clap` (derive). Every setting is an option; no environment variable is read.
 
-The Node version read the environment variables `PORT` and `CYCLE`. If either of them is set, exit with a startup error that names the option replacing it (`--port`, `--no-cycle`). Otherwise a launch script that was only partly updated would run on the wrong port, or with cycling on by mistake.
+The Node version read the environment variables `PORT` and `CYCLE`. If either of them is set, exit with a startup error that names the option replacing it (`--port`, `--cycle`) and, for `CYCLE`, says that cycling is now off unless `--cycle` is given. Otherwise a launch script that was only partly updated would run on the wrong port, or with a cycling setting that its author did not intend.
 
-`ITEM_FILE` is the only positional argument. The Node version took a second positional argument, the position file. A second positional argument is now a startup error, so that an old launch script cannot run with its position silently ignored. The error message must say that the position file argument was removed, and must point to the README section about moving from the Node version.
+`ITEM_FILE` is the only positional argument. The Node version took a second positional argument, the position file. A second positional argument is now a startup error, so that an old launch script cannot run with its position silently ignored. The error message must say that the position file argument was removed and that cycling is now off unless `--cycle` is given, and must point to the README section about moving from the Node version. Every old launch script hits this error, so it is the place to announce both changes.
 
 Two servers that serve the same item file need different state files; give at least one of them `--state-file`.
 
@@ -130,9 +131,10 @@ These were observed by running the Node version:
 - Lines that are not valid UTF-8 were sent with each invalid sequence replaced by U+FFFD. Now every line is sent unchanged.
 - The position file was rewritten in place on every `GET`. An empty position file silently restarted the queue at line 0, and a damaged one made the Node version write `NaN` into it. Now the position is saved in the state file every 30 seconds, and a damaged state file is a startup error.
 - The position file was the second positional argument. Now there is a state file, given with `--state-file` or found next to the item file.
-- The port and the cycling setting came from the environment variables `PORT` and `CYCLE`, and every `CYCLE` value except `false` meant cycling on. Now they are the options `--port` and `--no-cycle`.
+- The port and the cycling setting came from the environment variables `PORT` and `CYCLE`. Now they are the options `--port` and `--cycle`.
+- Cycling was on unless `CYCLE` was exactly `false`. Now cycling is off unless `--cycle` is given.
 
-For valid requests from clients that are not blocked (`GET` on the `--path` value, with `max` absent or a number from 1 to the `--max-batch` value), served from an item file that is valid UTF-8, the response bodies must be byte-identical to the Node version's. After the same sequence of such requests, the position must equal the number in the Node version's position file.
+For valid requests from clients that are not blocked (`GET` on the `--path` value, with `max` absent or a number from 1 to the `--max-batch` value), served from an item file that is valid UTF-8, the response bodies must be byte-identical to the Node version's. After the same sequence of such requests, with the same cycling setting in both versions, the position must equal the number in the Node version's position file.
 
 ## Client tracking
 
@@ -404,7 +406,7 @@ Required, at minimum:
 
 **Queue**
 
-- Batches in file order; a short batch at the end of the file; a batch that takes exactly the last line, followed by a request that gets an empty batch and wraps; no wrap when cycling is off; a last line without `\n`; empty lines; an empty file; bytes that are not valid UTF-8.
+- Batches in file order; a short batch at the end of the file; a batch that takes exactly the last line, followed by a request that gets an empty batch and wraps; no wrap when cycling is off, which is the default; a last line without `\n`; empty lines; an empty file; bytes that are not valid UTF-8.
 - An item file replaced during a pass (by renaming a new file over it) is served from the next pass on.
 - Restart: stop after some batches, open a new queue at the position that the old one reported, continue with the next line.
 - A starting position greater than the line count: error.
@@ -438,7 +440,7 @@ Required, at minimum:
 - Through the whole server: hand out some lines, exit cleanly, start again with the same state file, and the next request continues with the next line; the wrap counter is kept too.
 - With paused time: after a hand-out, the file on disk holds the new position within 30 seconds, without an exit. After a block, the file on disk holds it immediately.
 - A start from a snapshot that is older than the last hand-outs repeats those lines and skips none.
-- Without `--state-file`, the state file for `items.txt` is `items.txt.bqs.json` (append to the whole path; `Path::with_extension` would give `items.bqs.json`). A second positional argument is an error whose message points to the README. `PORT` or `CYCLE` set in the environment is a startup error whose message names the replacing option.
+- Without `--state-file`, the state file for `items.txt` is `items.txt.bqs.json` (append to the whole path; `Path::with_extension` would give `items.bqs.json`). A second positional argument is an error whose message mentions `--cycle` and points to the README. `PORT` or `CYCLE` set in the environment is a startup error whose message names the replacing option.
 
 **Dashboard** (with ratatui's `TestBackend`)
 
@@ -455,13 +457,13 @@ Required, at minimum:
 
 **One-time checks, not kept in the repository**
 
-- Before deleting the Node version: give each version its own copy of one item file that is valid UTF-8, start both at the same position, send both the same sequence of valid requests, and confirm byte-identical bodies. After a clean exit, the position in the Rust version's state file must equal the number in the Node version's position file. Include a wrap. Then follow the README's instructions for moving from the Node version, using that position file, and confirm that the Rust version continues with the next line.
+- Before deleting the Node version: give each version its own copy of one item file that is valid UTF-8, start both at the same position, send both the same sequence of valid requests, and confirm byte-identical bodies. After a clean exit, the position in the Rust version's state file must equal the number in the Node version's position file. Do this once with cycling on in both versions (the Node version's default; `--cycle` for the Rust version), including a wrap, and once with cycling off in both (`CYCLE=false` for the Node version), including requests after the end of the file. Then follow the README's instructions for moving from the Node version, using that position file, and confirm that the Rust version continues with the next line.
 - Run the real binary in a detached `tmux` session, drive it with `tmux send-keys`, send requests with `curl`, and read the screen with `tmux capture-pane -p`. Confirm that the dashboard looks like the layout above and that keys work. Confirm that the terminal is restored after quitting, after `SIGTERM`, and after a forced panic. Confirm that the state file is saved when the `tmux` session is killed while the server runs (this sends `SIGHUP`).
 
 ## Deliverables
 
 1. The Rust crate at the repository root, with its `Cargo.lock` committed, building without warnings and passing `cargo clippy` and `cargo test`.
-2. `README.md`: what the server does, how to run it, the HTTP contract, the state file, the dashboard keys, and that reverse DNS names are not verified. The repository has no README today. Include a section "Moving from the Node version": replace the environment variables `PORT` and `CYCLE=false` with `--port` and `--no-cycle`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
+2. `README.md`: what the server does, how to run it, the HTTP contract, the state file, the dashboard keys, and that reverse DNS names are not verified. The repository has no README today. Include a section "Moving from the Node version": replace the environment variable `PORT` with `--port`; add `--cycle` unless the old launch set `CYCLE=false`, because cycling is now off by default; remove `CYCLE`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
 3. Removal of `index.js`, `readlines.js`, `package.json`, and `LICENSE`. That `LICENSE` file is the license of the vendored `readlines.js` only. Do not add a license for the Rust crate; the operator has not chosen one.
 4. `.gitignore` with `target/`.
 
