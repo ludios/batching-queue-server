@@ -19,12 +19,10 @@ batching-queue-server [OPTIONS] ITEM_FILE
 | Option | Default | Meaning |
 |---|---|---|
 | `--state-file FILE` | the `ITEM_FILE` path with `.bqs.json` appended | Where the state file is (see "The state file"). For `/data/items.txt` the default is `/data/items.txt.bqs.json`. |
-| `--port PORT` | `31417` | The TCP port to listen on. The server listens on the IPv6 wildcard address `[::]` for both IPv4 and IPv6, so the system must support IPv6. |
+| `--port PORT` | `31417` | The TCP port to listen on, on every IPv4 and IPv6 address. The system must support IPv6. |
 | `--cycle` | off | After the last line of the file is handed out, continue with its first line again. Without `--cycle`, the server doesn't hand out any more lines after the last one. |
 | `--max-batch N` | `10000` | The most lines in one response. Must be at least 1. |
 | `--path PATH` | `/` | The only request path at which lines are handed out; every other path gets `403`. It must start with `/` and consist of `/`, `A`-`Z`, `a`-`z`, `0`-`9`, `-`, `_`, `.`, and `~`, without a segment that is `.` or `..`. |
-
-Every setting is a command-line option; the server doesn't take any setting from an environment variable.
 
 For example:
 
@@ -100,28 +98,25 @@ The state file holds everything that survives a restart: the position, the wrap 
 
 - `position` is the number of lines already handed out in the current pass over the item file, which is also the 0-based index of the next line to hand out.
 - `wraps` counts how many times the server has started again at the first line.
-- `clients` has one record for each IP address that has ever made a request, whatever the reply was. `items` is the number of lines handed to that IP address, and `user_agent` is the `User-Agent` of its most recent request that had one (with each invalid UTF-8 sequence replaced by U+FFFD, each control character replaced by `?`, and cut to 200 characters), or `null`. `host` is the reverse DNS name that a lookup found (see "Reverse DNS names"), or `null`; a record without `host`, as written by an earlier version of the server, counts as `null`.
+- `clients` has one record for each IP address that has ever made a request, whatever the reply was. `items` is the number of lines handed to that IP address, and `user_agent` is the `User-Agent` of its most recent request that had one, or `null`. `host` is the reverse DNS name that a lookup found (see "Reverse DNS names"), or `null`.
 - `view` holds the dashboard's sort column (one of `blocked`, `ip`, `items`, `first_seen`, `last_seen`, `requests`, `host`), whether the sort direction is inverted, and whether the `HOST` and `UA` columns are shown. It may be left out, and then the values shown above apply.
 
 If the state file does not exist, the server starts at position 0 and creates it. So check the path if a restarted server reports that it created the state file: a mistyped `--state-file`, or an item file that was moved or renamed (which moves the default state file path), makes the server start again at line 0 without its block list. A state file that exists but cannot be read, or that is not exactly in this form, is a startup error, and so is a `position` greater than the number of lines in the item file.
 
-The server saves the state file at startup, every 30 seconds while anything in it has changed, at once after a block, an unblock, or a wrap, and at every clean exit (see "Exiting"). It saves by writing a new file and renaming it over the old one, so the state file is always complete. After a crash, a `kill -9`, or a power loss, the server starts again from the last save, which is normally at most about 30 seconds old: the lines handed out after that save are handed out a second time. No line is skipped.
+The server saves the state file every 30 seconds while anything in it has changed, at once after a block, an unblock, or a wrap, and at every clean exit (see "Exiting"). A save never leaves a partly written state file. After a crash, a `kill -9`, or a power loss, the server starts again from the last save, which is normally at most about 30 seconds old: the lines handed out after that save are handed out a second time. No line is skipped.
 
-The events, the rates, and the pause are not saved, and neither is a lookup that found no name.
+The pause, the events, and the rates are not saved.
 
 To change the state, stop the server, edit the state file, and start the server again. For example, to serve a new item file from its first line, set `position` to 0. To block an IP address that has never made a request, add a record for it with `"blocked": true`; every record needs all of the fields shown above except `host`. The server cannot notice that the item file was replaced while it was stopped: it applies the saved position to whatever file is at the path when it starts.
 
 ### The lock file
 
-Next to the state file is its lock file, whose path is the state file's path with `.lock` appended (`items.txt.bqs.json.lock`). At startup, the server takes an exclusive lock on it, so that a second server with the same state file path refuses to start instead of overwriting the first server's state.
+The server locks a file whose path is the state file's path with `.lock` appended (`items.txt.bqs.json.lock`), so that a second server with the same state file path refuses to start.
 
-- The lock file is permanent and empty. The server creates it if needed, never writes to it, and never deletes it.
-- The lock file is never stale. The operating system releases the lock when the server's process ends, however it ends, also after a crash or a `kill -9`. So the error that the state file is in use always means that a running process holds the lock now, normally a server that uses the state file.
-- Do not delete the lock file while a server runs. A server started after that would create and lock a new lock file at the same path, and the two servers would then overwrite each other's state file.
-
-Limits:
-
-- The lock file's path is the state file's path as given, with `.lock` appended. So a symlink or a hard link to the state file under another name gets a different lock file, and two servers that use the two names are not detected.
+- The lock file is permanent and empty.
+- The lock is never stale: the operating system releases it when the server's process ends, also by a crash or a `kill -9`. So the error that the state file is in use always means that a running process holds the lock.
+- Do not delete the lock file while a server runs: a second server could then start, and the two would overwrite each other's state file.
+- Two servers that reach one state file by different paths (through a symlink or a hard link) are not detected.
 - The lock is reliable only on a local filesystem.
 
 ## The dashboard
@@ -140,12 +135,12 @@ F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
 
 From top to bottom:
 
-1. The status line: the item file name, the port, the position and the number of lines in the file, the percent done, the estimated time until the end of the pass at the rate of the last minute (or `DONE` when cycling is off and every line has been handed out; so with cycling off, an item file without lines shows `DONE` at once), the lines handed out and the requests in the last minute, the wrap counter (with `--cycle` only), and the number of client IP addresses and how many of them are blocked. While the server is paused, the line starts with `PAUSED`. A blank row follows it.
-2. The clients table, one row per client IP address. `FIRST` and `LAST` are the times since the first and the most recent request. `HOST` is the reverse DNS name (see "Reverse DNS names"). `UA` is the most recent `User-Agent`; this column is hidden unless the operator has chosen to show it. Rows of blocked IP addresses are drawn in red. The selected row is black on cyan, or black on red if its client is blocked.
+1. The status line: the item file name, the port, the position and the number of lines in the file, the percent done, the estimated time until the end of the pass at the rate of the last minute (or `DONE` when cycling is off and every line has been handed out), the lines handed out and the requests in the last minute, the wrap counter (with `--cycle` only), and the number of client IP addresses and how many of them are blocked. While the server is paused, the line starts with `PAUSED`.
+2. The clients table, one row per client IP address. `FIRST` and `LAST` are the times since the first and the most recent request. `HOST` is the reverse DNS name (see "Reverse DNS names"). `UA` is the most recent `User-Agent`; this column is hidden unless the operator has chosen to show it. Rows of blocked IP addresses are drawn in red.
 3. The events pane: the most recent requests, newest at the bottom, each with its time, its client, and its outcome (the number of lines handed out, `blocked`, `wrong path`, `paused`, or `rejected` with the status code).
 4. The key bar.
 
-The terminal window's title shows the state too: `12.5% items.txt`, `PAUSED 12.5% items.txt`, `DONE items.txt`, and `stopped items.txt` after the server has exited (but not after a `kill -9`).
+The terminal window's title shows the state too: `12.5% items.txt`, `PAUSED 12.5% items.txt`, `DONE items.txt`, and `stopped items.txt` after a clean exit (see "Exiting").
 
 | Key or mouse | Action |
 |---|---|
@@ -164,7 +159,7 @@ The terminal window's title shows the state too: `12.5% items.txt`, `PAUSED 12.5
 | `Ctrl-C` | Quit at once. |
 | Left click on a key-bar label | Same as that key. |
 
-A click on `allowed` in a row that is not selected only selects that client. Rows re-sort several times per second, so this keeps a click from blocking a client that moved under the pointer: the operator always sees the highlight on a client before blocking it with a click.
+A click on `allowed` or `blocked` in a row that is not selected only selects that client, because the rows re-sort several times per second and may have moved just before the click.
 
 Quitting the dashboard stops the server. The sort column, the sort direction, and which of `HOST` and `UA` are shown are kept in the state file.
 
@@ -172,14 +167,13 @@ Quitting the dashboard stops the server. The sort column, the sort direction, an
 
 The `HOST` column shows the reverse DNS name (the `PTR` record) of each client IP address, as a hint about who the client is.
 
-- A client without a name is looked up at its first request in each run of the server, in the background, and not again in that run. At most 8 lookups run at the same time, and further ones wait their turn. A lookup is given up 5 seconds after it started running; its wait for a turn does not count.
+- A client without a name is looked up in the background at its first request in each run of the server, and not again in that run. A lookup is given up after 5 seconds.
 - A name that a lookup found is saved in the state file. So the dashboard shows it from the start of the next run, and the client is never looked up again. To have a saved name looked up again, stop the server, set the client's `host` to `null` in the state file, and start the server again.
-- Lookups run also while the `HOST` column is hidden.
 - An empty `HOST` cell means that the client doesn't have a name and that its lookup has not started or not finished yet in this run; `-` means that its lookup in this run didn't find a name, failed, or was given up.
 - The `HOST` column is as wide as its longest name, so a long name leaves less room for `UA`, or none. A name longer than the rest of the row is shown as `…` followed by its end, because the domain is at the end.
 - The names are not verified. Nothing checks that a name resolves back to the IP address, so the owner of an address can publish any name for it.
-- The lookups send the client IP addresses to the DNS resolver that the system is configured with (`/etc/resolv.conf`).
-- Names are shown in ASCII form: an internationalized label as `xn--…`, and an unusual character escaped in the style of a DNS zone file, as `\` followed by the character (for example `\[`) or by its byte in three octal digits (for example `\033` for ESC).
+- The lookups send the client IP addresses to the DNS resolver that the system is configured with (`/etc/resolv.conf`), also while the `HOST` column is hidden.
+- Names are shown in ASCII: an internationalized label as `xn--…`, and an unusual character escaped (for example `\033` for ESC).
 - Without a dashboard, the server doesn't do any lookups.
 
 ## Exiting
