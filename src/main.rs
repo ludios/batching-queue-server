@@ -265,8 +265,8 @@ fn can_show_dashboard() -> bool {
 fn main() {
     let args = Args::parse();
     let show_dashboard = can_show_dashboard();
-    // With the dashboard, nothing else may write to the terminal
-    if !show_dashboard {
+    // With the dashboard, nothing else may write to the terminal, but a log file is fine
+    if !show_dashboard || !std::io::stderr().is_terminal() {
         tracing_subscriber::fmt()
             .with_writer(std::io::stderr)
             .with_target(false)
