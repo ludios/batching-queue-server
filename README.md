@@ -187,19 +187,3 @@ The `HOST` column shows the reverse DNS name (the `PTR` record) of each client I
 These are clean exits: `q` followed by `y`, `Ctrl-C` in the dashboard, and the signals `SIGINT`, `SIGTERM`, and `SIGHUP` (sent when the terminal window is closed). At a clean exit, the server stops handing out lines, saves the state file, restores the terminal, and exits with status 0, or with status 1 if the save failed. Before the server has started (for example, during a long scan of the item file), these signals end it at once, which loses nothing.
 
 If saving the state file or reading the item file fails while the server runs, the server stops handing out lines, saves the state file (unless saving is what failed), prints the error to stderr, and exits with status 1.
-
-## Moving from the Node version
-
-- Replace the environment variable `PORT` with `--port`.
-- Add `--cycle` unless the old launch set `CYCLE=false`, because cycling is now off by default. Remove `CYCLE`.
-- Remove the second positional argument, the position file.
-- The server writes its state file next to the item file, and beside the state file its lock file and, at each save, a temporary file. So it needs write access to the item file's directory, unless `--state-file` puts the state file elsewhere.
-- To continue a queue that is in progress, stop the Node version, and create the state file from the number in the old position file (write it to the `--state-file` path instead, if you give one):
-
-  ```
-  echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json
-  ```
-
-  The old position file stays untouched, so going back to the Node version remains possible. The Node version is in this repository's history: commit 24e616cf1c82 is the last one that has it. To go back without handing out lines a second time, stop the Rust server and write the `position` of its state file into the old position file.
-
-Replies that differ from the Node version's: an invalid `max` (for example `0`, `1.5`, `-1`, `1e3`, or an empty value) gets `400`; `max` is limited to `--max-batch`; only the `--path` value hands out lines, and every other path gets `403`; a method other than `GET` gets `405` instead of no reply; and lines that are not valid UTF-8 are sent unchanged instead of with U+FFFD in place of each invalid sequence.
