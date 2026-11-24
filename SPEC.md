@@ -44,22 +44,20 @@ batching-queue-server [OPTIONS] ITEM_FILE
 
 Use `clap` (derive). Every setting is an option; no environment variable is read.
 
-The Node version read the environment variables `PORT` and `CYCLE`. If either of them is set, exit with a startup error that names the option replacing it (`--port`, `--cycle`) and, for `CYCLE`, says that cycling is now off unless `--cycle` is given. Otherwise a launch script that was only partly updated would run on the wrong port, or with a cycling setting that its author did not intend.
-
-`ITEM_FILE` is the only positional argument. The Node version took a second positional argument, the position file. A second positional argument is now a startup error, so that an old launch script cannot run with its position silently ignored. The error message must say that the position file argument was removed and that cycling is now off unless `--cycle` is given, and must point to the README section about moving from the Node version. Every old launch script hits this error, so it is the place to announce both changes.
+`ITEM_FILE` is the only positional argument; a second one is an argument error. (The Node version took its position file there.)
 
 Two servers that serve the same item file need different state files; give at least one of them `--state-file`.
 
 ### Startup order
 
-1. Parse the arguments, and check that the environment variables `PORT` and `CYCLE` are not set.
+1. Parse the arguments.
 2. Open and scan the item file.
 3. Load the state file (see "State file") and check it against the item file.
 4. Bind the port, without accepting connections yet. Listen on the IPv6 wildcard address `[::]` at the `--port` value, for both IPv4 and IPv6. Do not rely on the system default for this: clear `IPV6_V6ONLY` on the socket explicitly (for example with the `socket2` crate). There is no fallback to IPv4 only.
 5. Save the state file once. This makes a state file location that cannot be written a startup error. Because it comes after every other check, a startup that fails changes nothing on disk.
 6. Print one line to stderr that names the state file and says either which position was loaded from it or that it was newly created. Then start the dashboard and accept connections.
 
-Argument errors are reported by `clap` in its usual way (its own message, exit status 2). Every other startup error (`PORT` or `CYCLE` set, unreadable item file, invalid or unreadable state file, state file that cannot be written, port in use) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
+Argument errors are reported by `clap` in its usual way (its own message, exit status 2). Every other startup error (unreadable item file, invalid or unreadable state file, state file that cannot be written, port in use) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
 
 ## The item queue
 
@@ -440,7 +438,7 @@ Required, at minimum:
 - Through the whole server: hand out some lines, exit cleanly, start again with the same state file, and the next request continues with the next line; the wrap counter is kept too.
 - With paused time: after a hand-out, the file on disk holds the new position within 30 seconds, without an exit. After a block, the file on disk holds it immediately.
 - A start from a snapshot that is older than the last hand-outs repeats those lines and skips none.
-- Without `--state-file`, the state file for `items.txt` is `items.txt.bqs.json` (append to the whole path; `Path::with_extension` would give `items.bqs.json`). A second positional argument is an error whose message mentions `--cycle` and points to the README. `PORT` or `CYCLE` set in the environment is a startup error whose message names the replacing option.
+- Without `--state-file`, the state file for `items.txt` is `items.txt.bqs.json` (append to the whole path; `Path::with_extension` would give `items.bqs.json`). A second positional argument is an argument error.
 
 **Dashboard** (with ratatui's `TestBackend`)
 
