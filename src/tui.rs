@@ -644,11 +644,11 @@ impl Dashboard {
         let status = self.status(snapshot);
         buf.set_stringn(x, area.y, status, usize::from(area.width), Style::new());
 
-        // Between the status line and the key bar
-        let middle = area.height.saturating_sub(2);
+        // Between the blank row under the status line and the key bar
+        let middle = area.height.saturating_sub(3);
         let events_height = middle / 3;
         let table_height = middle - events_height;
-        let table = Rect::new(area.x, area.y + 1, area.width, table_height);
+        let table = Rect::new(area.x, area.y + 2, area.width, table_height);
         self.draw_table(buf, table, snapshot, now);
         let events = Rect::new(area.x, table.bottom(), area.width, events_height);
         self.draw_events(buf, events, &snapshot.events);
@@ -1064,7 +1064,7 @@ mod tests {
                 _dir: dir,
                 shared,
                 dashboard: Dashboard::new(config, TimeZone::UTC),
-                terminal: Terminal::new(TestBackend::new(100, 12)).unwrap(),
+                terminal: Terminal::new(TestBackend::new(100, 13)).unwrap(),
             }
         }
 
@@ -1176,6 +1176,7 @@ mod tests {
             test.draw(),
             [
                 "items.txt :31417  0/10 0.0%  ETA 0s  1,000 items/min  2 req/min  wrap 0  3 IPs, 1 blocked",
+                "",
                 "         IP            ITEMS▼   FIRST   LAST   REQS  HOST",
                 "allowed  203.0.113.7   12,400      3d     2s    124",
                 "blocked  198.51.100.9     300      3d     2s  1,215",
@@ -1197,28 +1198,28 @@ mod tests {
         test.draw();
         assert_eq!(test.order(), [A, B, C]);
 
-        test.click_text(1, "REQS");
+        test.click_text(2, "REQS");
         assert_eq!(test.view().sort_column, Column::Reqs);
         assert_eq!(test.order(), [B, A, C]);
-        assert!(test.draw()[1].contains("REQS▼"));
-        test.click_text(1, "REQS");
+        assert!(test.draw()[2].contains("REQS▼"));
+        test.click_text(2, "REQS");
         assert_eq!(test.order(), [C, A, B]);
-        assert!(test.draw()[1].contains("REQS▲"));
+        assert!(test.draw()[2].contains("REQS▲"));
 
         // A column that becomes the sort column starts with its direction when first chosen
-        test.click_text(1, "IP");
+        test.click_text(2, "IP");
         assert_eq!(
             (test.view().sort_column, test.view().sort_inverted),
             (Column::Ip, false)
         );
         assert_eq!(test.order(), [B, A, C]);
-        assert!(test.draw()[1].contains("IP▲"));
+        assert!(test.draw()[2].contains("IP▲"));
 
         test.press(KeyCode::F(6));
         assert_eq!(test.view().sort_column, Column::Items);
         test.press(KeyCode::Char('i'));
         assert_eq!(test.order(), [C, B, A]);
-        assert!(test.draw()[1].contains("ITEMS▲"));
+        assert!(test.draw()[2].contains("ITEMS▲"));
         test.press(KeyCode::F(7));
         assert_eq!(test.order(), [A, B, C]);
 
@@ -1240,10 +1241,10 @@ mod tests {
         test.press(KeyCode::F(2));
         test.press(KeyCode::F(6));
         assert_eq!(test.view().sort_column, Column::Blocked);
-        assert!(test.draw()[1].starts_with("▼"));
+        assert!(test.draw()[2].starts_with("▼"));
 
         // A click on the UA header does nothing
-        test.click_text(1, "UA");
+        test.click_text(2, "UA");
         assert_eq!(
             (test.view().sort_column, test.view().sort_inverted),
             (Column::Blocked, false)
@@ -1258,9 +1259,9 @@ mod tests {
             ..View::default()
         };
         let mut test = Test::new(10, false, view, &three_clients());
-        assert!(test.draw()[1].contains("HOST▼"));
+        assert!(test.draw()[2].contains("HOST▼"));
         test.press(KeyCode::F(3));
-        let header = &test.draw()[1];
+        let header = &test.draw()[2];
         assert!(!header.contains('▼') && !header.contains('▲'), "{header}");
         assert_eq!(
             test.view(),
@@ -1283,7 +1284,7 @@ mod tests {
             ..view
         };
         let mut test = Test::new(10, false, view, &three_clients());
-        let header = &test.draw()[1];
+        let header = &test.draw()[2];
         assert!(!header.contains('▼') && !header.contains('▲'), "{header}");
         assert!(!header.contains("HOST"), "{header}");
         assert_eq!(test.order(), [B, A, C]);
@@ -1332,7 +1333,7 @@ mod tests {
     fn a_client_that_is_not_drawn_is_not_blocked_by_key() {
         let mut test = Test::new(10, false, View::default(), &three_clients());
         // Room for the header of the clients table, but for none of its rows
-        test.terminal = Terminal::new(TestBackend::new(100, 3)).unwrap();
+        test.terminal = Terminal::new(TestBackend::new(100, 4)).unwrap();
         test.draw();
         assert_eq!(test.dashboard.selected, Some(A));
         test.press(KeyCode::F(9));
@@ -1350,8 +1351,8 @@ mod tests {
         assert_eq!(test.order(), [C, A, B]);
         assert_eq!(test.dashboard.selected, Some(B));
         let buffer = test.terminal.backend().buffer();
-        assert!(buffer[(20, 4)].modifier.contains(Modifier::REVERSED));
-        assert!(!buffer[(20, 2)].modifier.contains(Modifier::REVERSED));
+        assert!(buffer[(20, 5)].modifier.contains(Modifier::REVERSED));
+        assert!(!buffer[(20, 3)].modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
@@ -1367,7 +1368,7 @@ mod tests {
         test.draw();
         let ip = |i: u8| Some(IpAddr::from([10, 0, 0, i]));
         assert_eq!(test.dashboard.selected, ip(0));
-        // 12 rows: 1 status, 1 key bar, 3 events, 1 header, 6 client rows
+        // 13 rows: 1 status, 1 blank, 1 key bar, 3 events, 1 header, 6 client rows
         assert_eq!(test.dashboard.drawn.page, 6);
         test.press(KeyCode::Up);
         assert_eq!(test.dashboard.selected, ip(0));
@@ -1416,10 +1417,10 @@ mod tests {
         };
         let mut test = Test::new(10, false, view, &three_clients());
         let screen = test.draw();
-        assert!(screen[1].contains("REQS▲"));
-        assert!(!screen[1].contains("HOST"));
-        assert!(screen[1].contains("UA"));
-        assert!(screen[2].contains("curl/8.9.1"));
+        assert!(screen[2].contains("REQS▲"));
+        assert!(!screen[2].contains("HOST"));
+        assert!(screen[2].contains("UA"));
+        assert!(screen[3].contains("curl/8.9.1"));
         assert_eq!(test.order(), [C, A, B]);
 
         test.press(KeyCode::F(3));
@@ -1440,17 +1441,17 @@ mod tests {
     #[test]
     fn showing_and_hiding_columns() {
         let mut test = Test::new(10, false, View::default(), &three_clients());
-        let has_ua = |screen: &[String]| screen[1].contains("UA") && screen[2].contains("curl");
+        let has_ua = |screen: &[String]| screen[2].contains("UA") && screen[3].contains("curl");
         assert!(!has_ua(&test.draw()));
-        assert!(test.draw()[1].contains("HOST"));
+        assert!(test.draw()[2].contains("HOST"));
         test.press(KeyCode::F(2));
         assert!(has_ua(&test.draw()));
         test.press(KeyCode::Char('u'));
         assert!(!has_ua(&test.draw()));
         test.press(KeyCode::F(3));
-        assert!(!test.draw()[1].contains("HOST"));
+        assert!(!test.draw()[2].contains("HOST"));
         test.press(KeyCode::Char('h'));
-        assert!(test.draw()[1].contains("HOST"));
+        assert!(test.draw()[2].contains("HOST"));
     }
 
     fn row(ip: IpAddr, host: Host) -> Row {
@@ -1523,18 +1524,18 @@ mod tests {
             row(B, Host::Name(long.clone())),
         ]);
         snapshot.view.show_ua = true;
-        let screen = draw_snapshot(&snapshot, 160, 6);
+        let screen = draw_snapshot(&snapshot, 160, 7);
         assert!(
-            screen[3].contains(&format!("{long}  curl/8.9.1")),
+            screen[4].contains(&format!("{long}  curl/8.9.1")),
             "{screen:?}"
         );
         // The UA column starts after the longest name in every row
-        assert_eq!(screen[2].find("curl"), screen[3].find("curl"), "{screen:?}");
+        assert_eq!(screen[3].find("curl"), screen[4].find("curl"), "{screen:?}");
 
         // On a narrow screen, the name keeps its end and fills the rest of the row
-        let screen = draw_snapshot(&snapshot, 100, 6);
-        assert!(screen[3].ends_with("xxxx.example.com"), "{screen:?}");
-        assert!(screen[3].contains("  …x"), "{screen:?}");
+        let screen = draw_snapshot(&snapshot, 100, 7);
+        assert!(screen[4].ends_with("xxxx.example.com"), "{screen:?}");
+        assert!(screen[4].contains("  …x"), "{screen:?}");
         assert_eq!(shorten_host("abcdef", 4), "…def");
         assert_eq!(shorten_host("abcd", 4), "abcd");
     }
@@ -1543,12 +1544,12 @@ mod tests {
     fn pausing_and_resuming() {
         let mut test = Test::new(10, false, View::default(), &three_clients());
         let screen = test.draw();
-        assert!(screen[11].contains("F5 Pause"));
+        assert!(screen[12].contains("F5 Pause"));
         test.press(KeyCode::F(5));
         assert!(test.shared.state.lock().unwrap().is_paused());
         let screen = test.draw();
         assert!(screen[0].starts_with("PAUSED items.txt"));
-        assert!(screen[11].contains("F5 Resume"));
+        assert!(screen[12].contains("F5 Resume"));
         assert!(
             test.terminal.backend().buffer()[(0, 0)]
                 .modifier
@@ -1559,9 +1560,9 @@ mod tests {
         assert!(test.draw()[0].starts_with("items.txt"));
 
         // A click on a key bar label does what its key does
-        test.click_text(11, "F5 Pause");
+        test.click_text(12, "F5 Pause");
         assert!(test.shared.state.lock().unwrap().is_paused());
-        test.click_text(11, "Resume");
+        test.click_text(12, "Resume");
         assert!(!test.shared.state.lock().unwrap().is_paused());
     }
 
@@ -1573,20 +1574,20 @@ mod tests {
         assert!(test.input(ctrl_c.clone()));
 
         assert!(!test.press(KeyCode::Char('q')));
-        assert_eq!(test.draw()[11], "Quit the server? y/n");
+        assert_eq!(test.draw()[12], "Quit the server? y/n");
         // Any other key cancels, and does nothing else
         assert!(!test.press(KeyCode::F(5)));
         assert!(!test.shared.state.lock().unwrap().is_paused());
-        assert!(test.draw()[11].starts_with("F2 UA"));
+        assert!(test.draw()[12].starts_with("F2 UA"));
 
         assert!(!test.press(KeyCode::F(10)));
         let ctrl_y = Input::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
         assert!(!test.input(ctrl_y));
-        assert!(test.draw()[11].starts_with("F2 UA"));
+        assert!(test.draw()[12].starts_with("F2 UA"));
         assert!(!test.press(KeyCode::F(10)));
         assert!(test.press(KeyCode::Char('y')));
         assert!(!test.press(KeyCode::Char('n')));
-        test.click_text(11, "F10 Quit");
+        test.click_text(12, "F10 Quit");
         assert!(test.input(ctrl_c));
     }
 

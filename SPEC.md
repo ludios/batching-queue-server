@@ -293,6 +293,7 @@ From top to bottom. The numbers are examples, from a server started with `--cycl
 
 ```
 items.txt :31417  1,234,567/9,876,536 12.5%  ETA 14d  412 items/min  38 req/min  wrap 3  3 IPs, 1 blocked
+
          IP            ITEMS▼   FIRST   LAST   REQS  HOST
 allowed  203.0.113.7   12,400      3d     2s    124  crawler-7.example.net
 blocked  198.51.100.9     300      1h     0s  1,215  -
@@ -302,7 +303,7 @@ allowed  2001:db8::17       0      5m     5m      1  scanner.example.org
 F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
 ```
 
-1. **Status line** (1 row). Its parts come in this order, most important first, because a narrow window cuts off the right end:
+1. **Status line** (1 row), then a blank row. Its parts come in this order, most important first, because a narrow window cuts off the right end:
    - item file name without its directory
    - port
    - position `/` total lines
@@ -318,7 +319,7 @@ F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
 
 While the server is paused, the status line starts with `PAUSED` in a standout style (for example reverse video), and the key bar shows `F5 Resume` in place of `F5 Pause`.
 
-Let R be the number of rows between the status line and the key bar. The events pane gets R / 3 rows, rounded down; the clients table, including its header row, gets the rest.
+Let R be the number of rows between the blank row and the key bar. The events pane gets R / 3 rows, rounded down; the clients table, including its header row, gets the rest.
 
 No borders and no titles; they cost rows and columns. Numbers of items and requests use `,` as thousands separator. The dashboard must draw without panicking at every terminal size, down to 1×1, and with an empty item file and with no clients. In a window that is too small, parts are cut off; which parts is up to you.
 
