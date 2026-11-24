@@ -1,5 +1,6 @@
 //! The HTTP interface: one handler, which hands out lines at one path.
 
+use crate::dns::Resolver;
 use crate::state::{self, Outcome, Shared, State as ServerState};
 use anyhow::Result;
 use axum::Router;
@@ -31,6 +32,9 @@ pub struct Config {
 struct App {
     shared: Arc<Shared>,
     config: Arc<Config>,
+    /// Looks up the reverse DNS name of each client at its first request in this run of the
+    /// server. None when nothing shows the names.
+    resolver: Option<Arc<Resolver>>,
     /// Where the handler sends an error that must stop the server.
     fatal: UnboundedSender<anyhow::Error>,
 }
@@ -181,6 +185,11 @@ async fn handle(
         let decided = decide(&mut state, &app.config, ip, now, &request);
         if let Ok(Some(reply)) = &decided {
             state.record_outcome(ip, now, Instant::now(), reply.outcome());
+            if let Some(resolver) = &app.resolver
+                && state.start_lookup(ip)
+            {
+                resolver.spawn(app.shared.clone(), ip);
+            }
         }
         decided
     };
@@ -201,16 +210,20 @@ async fn handle(
 /// Returns the router of the server, which needs to be served with connection info (see
 /// `Router::into_make_service_with_connect_info`).
 ///
-/// `shared` is the state of the server, and `config` its settings. `fatal` is where the handler sends an error that must stop the server: a failed read of the
-/// item file. The handler then stops the state, and the request gets no response.
+/// `shared` is the state of the server, and `config` its settings. `resolver`, if given, looks
+/// up the reverse DNS name of each client at its first request in this run. `fatal` is where
+/// the handler sends an error that must stop the server: a failed read of the item file. The
+/// handler then stops the state, and the request gets no response.
 pub fn router(
     shared: Arc<Shared>,
     config: Config,
+    resolver: Option<Resolver>,
     fatal: UnboundedSender<anyhow::Error>,
 ) -> Router {
     let app = App {
         shared,
         config: Arc::new(config),
+        resolver: resolver.map(Arc::new),
         fatal,
     };
     // A fallback rather than a route, so that every request, whatever its method and path,
@@ -219,7 +232,7 @@ pub fn router(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::queue::Queue;
     use crate::state::{Client, View};
@@ -232,29 +245,32 @@ mod tests {
     use tower::ServiceExt;
 
     /// The server under test: its router and its state, for an item file of its own.
-    struct TestServer {
+    pub(crate) struct TestServer {
         _dir: TempDir,
-        shared: Arc<Shared>,
+        pub(crate) shared: Arc<Shared>,
         router: Router,
     }
 
-    /// Creates a server for an item file holding `contents`, with the `--path` value `path`,
-    /// the `--max-batch` value `max_batch`, and cycling as `cycle` says.
-    fn server(contents: &str, path: &str, max_batch: u64, cycle: bool) -> TestServer {
+    /// Creates a server for an item file holding `contents`, with cycling as `cycle` says, the
+    /// settings `config`, the client records `clients` (keyed by canonical IP address) at the
+    /// start, and `resolver` to look up host names, if given.
+    pub(crate) fn server_with(
+        contents: &str,
+        cycle: bool,
+        config: Config,
+        clients: BTreeMap<IpAddr, Client>,
+        resolver: Option<Resolver>,
+    ) -> TestServer {
         let dir = tempfile::tempdir().unwrap();
         let item_file = dir.path().join("items.txt");
         fs::write(&item_file, contents).unwrap();
         let queue = Queue::open(&item_file, 0, cycle).unwrap();
         let shared = Arc::new(Shared::new(
-            ServerState::new(queue, 0, BTreeMap::new(), View::default()),
+            ServerState::new(queue, 0, clients, View::default()),
             dir.path().join("items.txt.bqs.json"),
         ));
         let (fatal, _) = tokio::sync::mpsc::unbounded_channel();
-        let config = Config {
-            path: path.to_owned(),
-            max_batch,
-        };
-        let router = router(shared.clone(), config, fatal);
+        let router = router(shared.clone(), config, resolver, fatal);
         TestServer {
             _dir: dir,
             shared,
@@ -262,17 +278,27 @@ mod tests {
         }
     }
 
+    /// Creates a server for an item file holding `contents`, with the `--path` value `path`,
+    /// the `--max-batch` value `max_batch`, and cycling as `cycle` says.
+    fn server(contents: &str, path: &str, max_batch: u64, cycle: bool) -> TestServer {
+        let config = Config {
+            path: path.to_owned(),
+            max_batch,
+        };
+        server_with(contents, cycle, config, BTreeMap::new(), None)
+    }
+
     /// The response to one request, and how long it took.
-    struct TestResponse {
-        status: StatusCode,
+    pub(crate) struct TestResponse {
+        pub(crate) status: StatusCode,
         headers: HeaderMap,
-        body: Vec<u8>,
-        elapsed: Duration,
+        pub(crate) body: Vec<u8>,
+        pub(crate) elapsed: Duration,
     }
 
     impl TestServer {
         /// Sends a request with `method` for `target` (a path and a query string) from `ip`.
-        async fn request(&self, ip: &str, method: Method, target: &str) -> TestResponse {
+        pub(crate) async fn request(&self, ip: &str, method: Method, target: &str) -> TestResponse {
             let request = Request::builder()
                 .method(method)
                 .uri(target)

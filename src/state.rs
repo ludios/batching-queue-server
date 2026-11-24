@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 use serde::de::{Error as _, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -115,6 +115,17 @@ fn deserialize_clients<'de, D: Deserializer<'de>>(
     }
 
     deserializer.deserialize_map(ClientsVisitor)
+}
+
+/// What the reverse DNS lookup of a client found.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Host {
+    /// Not looked up yet in this run of the server, or the lookup has not finished.
+    NotLookedUp,
+    /// Looked up, without a name: no `PTR` record, an error, or given up.
+    NoName,
+    /// Looked up, with this name, cleaned by `clean_for_terminal`.
+    Name(String),
 }
 
 /// A column of the dashboard's clients table.
@@ -285,6 +296,9 @@ pub struct State {
     /// for each IP address that has made a request since.
     clients: BTreeMap<IpAddr, Client>,
     view: View,
+    /// The reverse DNS names of the clients whose lookup has started in this run of the server:
+    /// `Host::NotLookedUp` until it has finished. Never saved.
+    hosts: HashMap<IpAddr, Host>,
     /// The most recent requests, at most `MAX_EVENTS`, in the order they were recorded.
     events: VecDeque<Event>,
     rates: Rates,
@@ -313,6 +327,7 @@ impl State {
             wraps,
             clients,
             view,
+            hosts: HashMap::new(),
             events: VecDeque::with_capacity(MAX_EVENTS),
             rates: Rates::new(Instant::now()),
             paused: false,
@@ -468,6 +483,37 @@ impl State {
             self.view = view;
             self.dirty = true;
         }
+    }
+
+    /// Notes that the reverse DNS lookup of the client at `ip` (in its canonical form) starts,
+    /// unless it has started before in this run of the server.
+    ///
+    /// Returns whether it starts, so that the caller runs it.
+    pub fn start_lookup(&mut self, ip: IpAddr) -> bool {
+        assert_eq!(ip, ip.to_canonical(), "the IP address must be canonical");
+        if self.hosts.contains_key(&ip) {
+            return false;
+        }
+        self.hosts.insert(ip, Host::NotLookedUp);
+        true
+    }
+
+    /// Stores `host`, which the reverse DNS lookup of the client at `ip` found. That lookup must
+    /// have started (see `start_lookup`) and not have finished before.
+    pub fn set_host(&mut self, ip: IpAddr, host: Host) {
+        assert_ne!(
+            host,
+            Host::NotLookedUp,
+            "a finished lookup found a name or none"
+        );
+        let entry = self.hosts.get_mut(&ip).expect("the lookup has started");
+        assert_eq!(*entry, Host::NotLookedUp, "a client is looked up only once");
+        *entry = host;
+    }
+
+    /// Returns what the reverse DNS lookup of the client at `ip` has found in this run.
+    pub fn host(&self, ip: IpAddr) -> Host {
+        self.hosts.get(&ip).cloned().unwrap_or(Host::NotLookedUp)
     }
 
     /// Pauses handing out lines, or resumes it. A pause is not saved.

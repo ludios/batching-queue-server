@@ -1,6 +1,7 @@
 //! batching-queue-server hands out the lines of a text file to HTTP clients, in file order, a
 //! batch per request.
 
+mod dns;
 mod http;
 mod queue;
 mod state;
@@ -125,7 +126,10 @@ fn print_line(line: &str) {
 }
 
 /// Does the startup checks, loads the state, binds the port, and saves the state once.
-fn start(args: &Args) -> Result<Server> {
+///
+/// `look_up_hosts` says whether to look up the reverse DNS name of each client, which only a
+/// dashboard shows.
+fn start(args: &Args, look_up_hosts: bool) -> Result<Server> {
     let state_file = args.state_file();
     // The server writes these files (the temporary one at every save)
     let own_files = [
@@ -163,7 +167,8 @@ fn start(args: &Args) -> Result<Server> {
         path: args.path.clone(),
         max_batch: args.max_batch,
     };
-    let router = http::router(shared.clone(), config, fatal_sender.clone());
+    let resolver = look_up_hosts.then(dns::Resolver::system);
+    let router = http::router(shared.clone(), config, resolver, fatal_sender.clone());
     Ok(Server {
         shared,
         listener,
@@ -280,7 +285,7 @@ fn main() {
     let runtime = tokio::runtime::Runtime::new().expect("the tokio runtime starts");
     let mut dashboard = None;
     let result = runtime.block_on(async {
-        let server = start(&args)?;
+        let server = start(&args, show_dashboard)?;
         // Only now, so that until then (during a long scan of the item file, for example) these
         // signals end the process at once, which loses nothing
         let signal = exit_signal().context("cannot listen for signals")?;
@@ -344,7 +349,7 @@ mod tests {
 
     impl Running {
         fn start(args: &Args) -> Running {
-            let server = start(args).unwrap();
+            let server = start(args, false).unwrap();
             let port = server.listener.local_addr().unwrap().port();
             let (exit, exited) = oneshot::channel();
             let task = tokio::spawn(serve(server, async {
@@ -382,7 +387,7 @@ mod tests {
     }
 
     fn start_error(args: &Args) -> String {
-        format!("{:#}", start(args).err().unwrap())
+        format!("{:#}", start(args, false).err().unwrap())
     }
 
     #[test]

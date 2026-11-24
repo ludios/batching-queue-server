@@ -1,7 +1,7 @@
 //! The dashboard: a terminal UI that shows the queue, the clients, and the most recent requests,
 //! and lets the operator block clients, pause the server, and sort the clients table.
 
-use crate::state::{self, Client, Column, Event, Outcome, Shared, View};
+use crate::state::{self, Client, Column, Event, Host, Outcome, Shared, View};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use ratatui::buffer::Buffer;
@@ -65,24 +65,6 @@ pub struct Config {
     pub port: u16,
     /// Whether the server starts again at the first line after handing out the last one.
     pub cycle: bool,
-}
-
-/// What the reverse DNS lookup of a client found.
-#[derive(Clone, Debug, PartialEq, Eq)]
-enum Host {
-    NotLookedUp,
-    /// Looked up, without a name: no `PTR` record, an error, or given up.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "reverse DNS lookups are still to come")
-    )]
-    NoName,
-    /// Looked up, with this name, cleaned by `state::clean_for_terminal`.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "reverse DNS lookups are still to come")
-    )]
-    Name(String),
 }
 
 /// One client, as the dashboard shows it.
@@ -244,7 +226,7 @@ fn snapshot(shared: &Shared, events: usize, instant: Instant) -> Snapshot {
                 .map(|(&ip, client)| Row {
                     ip,
                     client: client.clone(),
-                    host: Host::NotLookedUp,
+                    host: state.host(ip),
                 })
                 .collect(),
             events: all_events
