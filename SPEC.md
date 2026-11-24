@@ -128,7 +128,7 @@ These were observed by running the Node version:
 - A `GET` to any path, for example `/favicon.ico`, consumed a line. Now only the `--path` value (by default `/`) hands out lines, and every other path gets `403`.
 - A request with a method other than `GET` never received a response. Now `405`.
 - Lines that are not valid UTF-8 were sent with each invalid sequence replaced by U+FFFD. Now every line is sent unchanged.
-- The position file was rewritten in place on every `GET`. An empty position file silently restarted the queue at line 0, and a damaged one made the Node version write `NaN` into it. Now the position is saved in the state file every 5 seconds, and a damaged state file is a startup error.
+- The position file was rewritten in place on every `GET`. An empty position file silently restarted the queue at line 0, and a damaged one made the Node version write `NaN` into it. Now the position is saved in the state file every 30 seconds, and a damaged state file is a startup error.
 - The position file was the second positional argument. Now there is a state file, given with `--state-file` or found next to the item file.
 - The port and the cycling setting came from the environment variables `PORT` and `CYCLE`, and every `CYCLE` value except `false` meant cycling on. Now they are the options `--port` and `--no-cycle`.
 
@@ -223,12 +223,12 @@ There is no automatic conversion of a Node position file. The README explains ho
 
 - Save by writing a temporary file in the same directory, calling `fsync` on it, and renaming it over the state file. Without the `fsync`, a power loss can leave an empty state file on some filesystems.
 - Save once at startup (step 5 of "Startup order").
-- After that, save every 5 seconds if anything in the saved data changed since the last save, immediately when a block or unblock happens, and at every clean exit (see "Exiting").
+- After that, save every 30 seconds if anything in the saved data changed since the last save, immediately when a block or unblock happens, and at every clean exit (see "Exiting").
 - Every save is one consistent snapshot: the position, the wrap counter, and every client record are from the same instant. Take the snapshot while holding the state lock; write it to disk after releasing that lock, so that a slow disk does not stall requests.
 - Two saves must never interleave, and an older snapshot must never overwrite a newer one.
 - Events, rates, and reverse DNS names are not saved.
 
-The state is deliberately not saved on every request, because each save rewrites every client record. The consequence: after a crash, a kill, or a power loss, the server restarts from the last saved snapshot, which is normally at most about 5 seconds old, and the lines handed out after that snapshot are handed out a second time. This is accepted. No line is skipped because of it. A clean exit loses nothing.
+The state is deliberately not saved on every request, because each save rewrites every client record. The consequence: after a crash, a kill, or a power loss, the server restarts from the last saved snapshot, which is normally at most about 30 seconds old, and the lines handed out after that snapshot are handed out a second time. This is accepted. No line is skipped because of it. A clean exit loses nothing.
 
 ## Exiting
 
@@ -436,7 +436,7 @@ Required, at minimum:
 - Startup errors: an empty file; damaged JSON; a wrong `version`; a missing field; a file holding only digits (a Node position file); a directory at the state file path; a `position` greater than the line count; `--state-file` naming the item file; a state file path whose parent directory does not exist (this is how to test "cannot be written"; a read-only directory is still writable for root).
 - A startup that fails leaves an existing state file unchanged.
 - Through the whole server: hand out some lines, exit cleanly, start again with the same state file, and the next request continues with the next line; the wrap counter is kept too.
-- With paused time: after a hand-out, the file on disk holds the new position within 5 seconds, without an exit. After a block, the file on disk holds it immediately.
+- With paused time: after a hand-out, the file on disk holds the new position within 30 seconds, without an exit. After a block, the file on disk holds it immediately.
 - A start from a snapshot that is older than the last hand-outs repeats those lines and skips none.
 - Without `--state-file`, the state file for `items.txt` is `items.txt.bqs.json` (append to the whole path; `Path::with_extension` would give `items.bqs.json`). A second positional argument is an error whose message points to the README. `PORT` or `CYCLE` set in the environment is a startup error whose message names the replacing option.
 
