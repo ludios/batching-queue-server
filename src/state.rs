@@ -222,7 +222,8 @@ impl State {
             last_seen: now,
             user_agent: None,
         });
-        client.requests += 1;
+        // Saturating, because a state file may hold any u64
+        client.requests = client.requests.saturating_add(1);
         client.last_seen = now;
         if let Some(user_agent) = user_agent {
             client.user_agent = Some(clean_for_terminal(user_agent, MAX_USER_AGENT_CHARS));
@@ -238,12 +239,12 @@ impl State {
         let client = self.clients.get_mut(&ip).expect("the request was recorded");
         let batch = self.queue.take(n)?;
         if batch.lines > 0 {
-            client.items += batch.lines;
+            client.items = client.items.saturating_add(batch.lines);
             self.dirty = true;
         }
         if batch.wrapped {
             self.dirty = true;
-            self.wraps += 1;
+            self.wraps = self.wraps.saturating_add(1);
             self.save_requested.notify_one();
             tracing::info!(
                 "reached the end of the item file; starting again at its first line (wrap {}, {} lines)",
@@ -515,6 +516,24 @@ mod tests {
         assert_eq!(
             with_suffix(Path::new("/data/items.txt"), ".bqs.json"),
             Path::new("/data/items.txt.bqs.json")
+        );
+    }
+
+    #[test]
+    fn counters_stop_at_their_maximum() {
+        let (_dir, shared) = setup(3);
+        let mut state = shared.state.lock().unwrap();
+        state.wraps = u64::MAX;
+        state.record_request(IP, time("2026-11-24T12:00:00Z"), None);
+        let client = state.clients.get_mut(&IP).unwrap();
+        client.requests = u64::MAX;
+        client.items = u64::MAX;
+        take(&mut state, 3);
+        take(&mut state, 3);
+        let client = &state.clients[&IP];
+        assert_eq!(
+            (client.requests, client.items, state.wraps),
+            (u64::MAX, u64::MAX, u64::MAX)
         );
     }
 
