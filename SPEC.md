@@ -27,7 +27,7 @@ The operator will read and maintain this code. Prefer the plainest design that m
 ## Command line
 
 ```
-batching-queue-server ITEM_FILE POSITION_FILE
+batching-queue-server ITEM_FILE STATE_FILE
 ```
 
 | Environment variable | Default | Meaning |
@@ -38,9 +38,9 @@ batching-queue-server ITEM_FILE POSITION_FILE
 
 Listen on `[::]:PORT`, accepting IPv4 and IPv6, as the Node version does.
 
-Existing launch scripts pass exactly these two positional arguments and the `PORT` and `CYCLE` variables, so keep them working unchanged. Use `clap` (derive, with its `env` feature).
+Existing launch scripts pass two positional arguments and the `PORT` and `CYCLE` variables. Keep them working unchanged: the second argument used to be the Node version's position file, and a file in that old format is accepted as a state file (see "State file"). Use `clap` (derive, with its `env` feature).
 
-Every startup error (bad arguments, unreadable item file, invalid position file, invalid state file, port in use) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
+Every startup error (bad arguments, unreadable item file, invalid state file, port in use) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
 
 ## The item queue
 
@@ -51,12 +51,13 @@ Every startup error (bad arguments, unreadable item file, invalid position file,
 - At startup, scan the file once to count its lines and to find the byte offset of the next line to serve. Then keep the file open and read forward from that offset.
 - Precondition: nobody modifies the item file while the server runs. If the number of lines read up to end of file differs from the startup count, log a warning and correct the total; do nothing more elaborate.
 
-### Position file
+### Position
 
-- Content: the number of lines already handed out in the current pass over the file, as ASCII decimal digits. This equals the 0-based index of the next line to serve. Write only the digits, with no newline, exactly as the Node version does, so that position files move freely between the two versions.
-- At startup: if the file does not exist, the position is 0. If it exists, trim ASCII whitespace and parse it as an unsigned integer. If parsing fails, or if the position is greater than the number of lines in the item file, exit with an error. (The Node version silently restarts at line 0 when the file is empty or damaged; that must not happen.)
-- Write the position file by writing a temporary file in the same directory and renaming it over the position file. Do not call `fsync`: a position that is a few seconds old after a power loss only causes some lines to be served twice.
-- Write it whenever a request changed the position, and before the response to that request is sent.
+The position is the number of lines already handed out in the current pass over the file. This equals the 0-based index of the next line to serve.
+
+The queue holds the position in memory. It is saved in the state file together with the client state (see "State file"); there is no separate position file. The queue itself does not read or write the state file: it is opened at a given position and reports its current position.
+
+If the starting position is greater than the number of lines in the item file, exit with an error.
 
 ### Taking a batch
 
@@ -64,7 +65,6 @@ To take up to `n` lines:
 
 1. Repeat up to `n` times: read the next line. If there is one, add it to the batch and increase the position by 1. If the end of the file was reached, stop.
 2. If the end of the file was reached, `CYCLE` is `true`, and the position is greater than 0: set the position to 0, seek to the start of the file, and increase the wrap counter by 1. Do not continue reading in this request; the lines from the top are served to the next request.
-3. If the position changed, write the position file.
 
 So a request that reaches the end of the file returns the lines it collected before the end (possibly none). With `CYCLE=false`, the position stays at the end and every later batch is empty.
 
@@ -100,8 +100,9 @@ These were observed by running the Node version:
 - There was no upper limit on `max`. Now `MAX_BATCH`.
 - A `GET` to any path, for example `/favicon.ico`, consumed a line. Now `404`.
 - A request with any method other than `GET` never received a response. Now `405`.
+- The position file was rewritten in place on every request, and an empty or damaged position file silently restarted the queue at line 0. Now the position is saved in the state file about once per second, and a damaged state file is a startup error.
 
-For valid requests (`GET /` with `max` absent or an integer from 1 to `MAX_BATCH`), the response bodies and the resulting position file must be byte-identical to the Node version's.
+For valid requests (`GET /` with `max` absent or an integer from 1 to `MAX_BATCH`), the response bodies must be byte-identical to the Node version's, and the position must equal the number in the Node version's position file.
 
 ## Client tracking
 
@@ -140,13 +141,14 @@ Use wall-clock timestamps (`jiff::Timestamp`) for `first_seen`, `last_seen`, and
 
 Pass the current time into the functions that need it instead of reading the clock inside them, so that tests control time.
 
-## Persistence of client state
+## State file
 
-State file path: the position file path with `.clients.json` appended (position file `pos` → state file `pos.clients.json`).
+One file, at the path given as `STATE_FILE`, holds everything that survives a restart: the position, the wrap counter, and the clients.
 
 ```json
 {
   "version": 1,
+  "position": 1234567,
   "wraps": 3,
   "clients": {
     "203.0.113.7": {
@@ -161,15 +163,26 @@ State file path: the position file path with `.clients.json` appended (position 
 }
 ```
 
-- At startup: if the file does not exist, start with no clients and a wrap counter of 0. If it exists but cannot be parsed, or its `version` is not 1, exit with an error. Never silently discard a block list.
-- Save by writing a temporary file in the same directory and renaming it over the state file.
-- Save when a block or unblock happens (immediately), every 5 seconds if anything changed since the last save, and at a clean exit.
+### Loading at startup
+
+- The file does not exist: position 0, wrap counter 0, no clients.
+- The file, after trimming ASCII whitespace, consists only of ASCII decimal digits: it is a position file written by the Node version. Use the number as the position, with wrap counter 0 and no clients. The first save replaces the file with the JSON format.
+- The file is JSON with `"version": 1`: use it.
+- Anything else (an empty file, damaged JSON, another `version`, a number too large for `u64`): exit with an error. Never silently restart at line 0 and never silently discard a block list.
+
+### Saving
+
+- Save by writing a temporary file in the same directory and renaming it over the state file. Do not call `fsync`.
+- Save once per second if anything changed since the last save, immediately when a block or unblock happens, and at a clean exit.
+- Every save is one consistent snapshot: the position, the wrap counter, and the counters are all from the same instant.
 - Two saves must never interleave, and an older snapshot must never overwrite a newer one.
-- Events and rates are not saved. The position file stays a separate file; after a crash, the counters may lag behind the position by up to 5 seconds, which is accepted.
+- Events and rates are not saved.
+
+The state is deliberately not saved on every request, because each save rewrites every client record. The consequence: after a crash, a kill, or a power loss, the server restarts from a snapshot that is up to about 1 second old, and the lines handed out after that snapshot are handed out a second time. This is accepted. Lines are never skipped because of it.
 
 ## Failures while running
 
-If writing the position file, writing the state file, or reading the item file fails, the server must stop: restore the terminal, print the error to stderr, and exit with status 1. A server that hands out lines it cannot record is worse than a stopped server. The request that hit the failure gets no response.
+If writing the state file or reading the item file fails, the server must stop: restore the terminal, print the error to stderr, and exit with status 1. A server that hands out lines it cannot record is worse than a stopped server. The request that hit the failure gets no response.
 
 A panic anywhere must end the whole process, never leave a half-working server. Set `panic = "abort"` in the Cargo profiles, and make sure the panic hook restores the terminal (including mouse capture) first.
 
@@ -261,13 +274,13 @@ Verified on docs.rs: `ratatui::init()` enables raw mode and the alternate screen
 
 Suggested shape (adjust if something simpler emerges):
 
-- `queue.rs`: the item file reader and the position file. No knowledge of HTTP or clients.
-- `state.rs`: clients, events, rates, the state file.
+- `queue.rs`: the item file reader and the in-memory position. No knowledge of HTTP, clients, or the state file.
+- `state.rs`: clients, events, rates, and loading and saving the state file.
 - `http.rs`: the router and its one handler.
 - `tui.rs`: drawing as a function of (view settings, state, current time); input handling as a function from an input event to an action.
 - `main.rs`: arguments, startup checks, wiring, shutdown.
 
-One `std::sync::Mutex` around the shared state is enough; never hold it across an `.await`. The HTTP handler may do its small synchronous file reads and the position write while holding it; that is a deliberate simplification. The dashboard runs on its own thread with a blocking input loop.
+One `std::sync::Mutex` around the shared state is enough; never hold it across an `.await`. The HTTP handler may do its small synchronous reads of the item file while holding it; that is a deliberate simplification. The dashboard runs on its own thread with a blocking input loop.
 
 Cargo profiles, as in the operator's other projects, plus `panic = "abort"`:
 
@@ -294,9 +307,9 @@ Required, at minimum:
 **Queue**
 
 - Batches in file order; a short batch at the end of the file; wrap with `CYCLE=true`; no wrap with `CYCLE=false`; a last line without `\n`; empty lines; an empty file; bytes that are not valid UTF-8.
-- Restart: stop after some batches, open again from the position file, continue with the next line.
-- Position file that is empty, non-numeric, or greater than the line count: startup error.
-- Property test: for arbitrary file bytes and an arbitrary sequence of batch sizes, with a simulated restart at arbitrary points, the concatenated batches of one pass equal the file's lines, each followed by `\n`, in order, with none missing and none repeated.
+- Restart: stop after some batches, open a new queue at the position that the old one reported, continue with the next line.
+- A starting position greater than the line count: error.
+- Property test: for arbitrary file bytes and an arbitrary sequence of batch sizes, with a simulated restart (as above) at arbitrary points, the concatenated batches of one pass equal the file's lines, each followed by `\n`, in order, with none missing and none repeated.
 
 **HTTP** (drive the router directly and supply the peer address yourself, so that tests can act as several client IPs; use tokio's paused time so that the 1 second delays cost nothing)
 
@@ -308,7 +321,8 @@ Required, at minimum:
 
 **State file**
 
-- Save and load round trip. Missing file: empty state. Damaged file or wrong version: startup error.
+- Save and load round trip, including the position and the wrap counter. Missing file: position 0 and no clients. A file holding only digits: that position and no clients. An empty file, damaged JSON, or a wrong version: startup error.
+- Through the whole server: hand out some lines, exit cleanly, start again with the same state file, and the next request continues with the next line.
 
 **Dashboard** (with ratatui's `TestBackend`)
 
@@ -320,7 +334,7 @@ Required, at minimum:
 
 **One-time checks, not kept in the repository**
 
-- Before deleting the Node version: run both versions against the same item file with the same sequence of valid requests and confirm byte-identical bodies and position files, including across a wrap.
+- Before deleting the Node version: run both versions against the same item file with the same sequence of valid requests and confirm byte-identical bodies, and that the position in the state file after a clean exit equals the number in the Node version's position file, including across a wrap. Also start the Rust version on a position file left by the Node version and confirm that it continues with the next line.
 - Run the real binary in a detached `tmux` session, drive it with `tmux send-keys`, send requests with `curl`, and read the screen with `tmux capture-pane -p`. Confirm that the dashboard looks like the layout above, that keys work, and that the terminal is restored after quitting, after `SIGTERM`, and after a forced panic.
 
 ## Deliverables
@@ -332,8 +346,8 @@ Required, at minimum:
 
 Suggested commit sequence, one logical change each:
 
-1. The Rust server without client tracking or dashboard, at parity with the Node version plus the listed fixes, with the queue and HTTP tests.
-2. Client tracking, blocking in the HTTP handler, and the state file.
+1. The Rust server without client tracking or dashboard, at parity with the Node version plus the listed fixes, with a state file that holds only the position and the wrap counter, and with the queue and HTTP tests.
+2. Client tracking, blocking in the HTTP handler, and the clients in the state file.
 3. The dashboard.
 4. `README.md` and removal of the Node files.
 
