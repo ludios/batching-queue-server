@@ -174,6 +174,7 @@ The `HOST` column shows the reverse DNS name (the `PTR` record) of each client I
 - Each client is looked up at most once per run of the server, at its first request in that run, in the background. At most 8 lookups run at the same time, and further ones wait their turn. A lookup is given up 5 seconds after it started running; its wait for a turn does not count.
 - Lookups run also while the `HOST` column is hidden.
 - An empty `HOST` cell means that the client's lookup has not started or not finished yet in this run; `-` means that the lookup didn't find a name, failed, or was given up.
+- The `HOST` column is as wide as its longest name, so a long name leaves less room for `UA`, or none. A name longer than the rest of the row is shown as `…` followed by its end, because the domain is at the end.
 - The names are not verified. Nothing checks that a name resolves back to the IP address, so the owner of an address can publish any name for it.
 - The lookups send the client IP addresses to the DNS resolver that the system is configured with (`/etc/resolv.conf`).
 - Names are shown in ASCII form: an internationalized label as `xn--…`, and an unusual character escaped in the style of a DNS zone file, as `\` followed by the character (for example `\[`) or by its byte in three octal digits (for example `\033` for ESC).
