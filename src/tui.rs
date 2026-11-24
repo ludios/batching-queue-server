@@ -33,7 +33,7 @@ use tokio::time::Instant;
 /// The longest time that `Running::finish` waits for the dashboard to restore the terminal.
 const FINISH_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// The longest time between two frames.
+/// How long the dashboard waits for an input before it draws the next frame.
 const FRAME_INTERVAL: Duration = Duration::from_millis(200);
 
 /// The number of blank screen columns between two columns of the clients table.
@@ -110,41 +110,6 @@ struct Snapshot {
     lines_per_minute: u64,
     /// The requests in the last 60 seconds.
     requests_per_minute: u64,
-}
-
-/// Copies what a frame shows from the state in `shared` at `instant` of tokio's clock, with at
-/// most `events` events, and sorts the clients after releasing the state lock.
-fn snapshot(shared: &Shared, events: usize, instant: Instant) -> Snapshot {
-    let mut snapshot = {
-        let state = shared.state.lock().unwrap();
-        let last_minute = state.last_minute(instant);
-        let all_events = state.events();
-        Snapshot {
-            position: state.queue().position(),
-            total: state.queue().total(),
-            wraps: state.wraps(),
-            paused: state.is_paused(),
-            view: state.view(),
-            rows: state
-                .clients()
-                .iter()
-                .map(|(&ip, client)| Row {
-                    ip,
-                    client: client.clone(),
-                    host: Host::NotLookedUp,
-                })
-                .collect(),
-            events: all_events
-                .range(all_events.len().saturating_sub(events)..)
-                .cloned()
-                .collect(),
-            lines_per_minute: last_minute.lines,
-            requests_per_minute: last_minute.requests,
-        }
-    };
-    let view = snapshot.view;
-    snapshot.rows.sort_by(|a, b| compare_rows(&view, a, b));
-    snapshot
 }
 
 fn header(column: Column) -> &'static str {
@@ -260,6 +225,41 @@ fn compare_rows(view: &View, a: &Row, b: &Row) -> Ordering {
     ordering.then(a.ip.cmp(&b.ip))
 }
 
+/// Copies what a frame shows from the state in `shared` at `instant` of tokio's clock, with at
+/// most `events` events, and sorts the clients after releasing the state lock.
+fn snapshot(shared: &Shared, events: usize, instant: Instant) -> Snapshot {
+    let mut snapshot = {
+        let state = shared.state.lock().unwrap();
+        let last_minute = state.last_minute(instant);
+        let all_events = state.events();
+        Snapshot {
+            position: state.queue().position(),
+            total: state.queue().total(),
+            wraps: state.wraps(),
+            paused: state.is_paused(),
+            view: state.view(),
+            rows: state
+                .clients()
+                .iter()
+                .map(|(&ip, client)| Row {
+                    ip,
+                    client: client.clone(),
+                    host: Host::NotLookedUp,
+                })
+                .collect(),
+            events: all_events
+                .range(all_events.len().saturating_sub(events)..)
+                .cloned()
+                .collect(),
+            lines_per_minute: last_minute.lines,
+            requests_per_minute: last_minute.requests,
+        }
+    };
+    let view = snapshot.view;
+    snapshot.rows.sort_by(|a, b| compare_rows(&view, a, b));
+    snapshot
+}
+
 /// Formats `n` with `,` as the thousands separator.
 fn thousands(n: u64) -> String {
     let digits = n.to_string();
@@ -310,6 +310,12 @@ fn shorten_host(name: &str) -> String {
     format!("…{end}")
 }
 
+/// Returns the label in the first column of a client that is blocked as `blocked` says: what a
+/// click on it does.
+fn block_label(blocked: bool) -> &'static str {
+    if blocked { "[unblock]" } else { "[block]" }
+}
+
 /// Returns the text of the cell of `column` in the row of `row`, at `now`.
 fn cell(column: Column, row: &Row, now: Timestamp) -> String {
     match column {
@@ -326,12 +332,6 @@ fn cell(column: Column, row: &Row, now: Timestamp) -> String {
         },
         Column::Ua => row.client.user_agent.as_deref().unwrap_or("-").to_owned(),
     }
-}
-
-/// Returns the label in the first column of a client that is blocked as `blocked` says: what a
-/// click on it does.
-fn block_label(blocked: bool) -> &'static str {
-    if blocked { "[unblock]" } else { "[block]" }
 }
 
 /// A column of the clients table, as placed on the screen.
@@ -533,40 +533,6 @@ impl Dashboard {
         )
     }
 
-    /// Draws `snapshot` at `now` into `buf`, which covers the whole terminal, and records what
-    /// it drew where.
-    fn draw(&mut self, buf: &mut Buffer, snapshot: &Snapshot, now: Timestamp) {
-        self.drawn = Drawn::default();
-        let area = *buf.area();
-        if area.is_empty() {
-            return;
-        }
-
-        let mut x = area.x;
-        if snapshot.paused {
-            let paused = "PAUSED";
-            let style = Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD);
-            x = buf
-                .set_stringn(x, area.y, paused, usize::from(area.width), style)
-                .0;
-            x = x.saturating_add(1);
-        }
-        let status = self.status(snapshot);
-        buf.set_stringn(x, area.y, status, usize::from(area.width), Style::new());
-
-        // Between the status line and the key bar
-        let middle = area.height.saturating_sub(2);
-        let events_height = middle / 3;
-        let table_height = middle - events_height;
-        let table = Rect::new(area.x, area.y + 1, area.width, table_height);
-        self.draw_table(buf, table, snapshot, now);
-        let events = Rect::new(area.x, table.bottom(), area.width, events_height);
-        self.draw_events(buf, events, &snapshot.events);
-        if area.height >= 2 {
-            self.draw_key_bar(buf, area.bottom() - 1, area, snapshot.paused);
-        }
-    }
-
     /// Draws the clients table of `snapshot` at `now` in `area` of `buf`.
     fn draw_table(&mut self, buf: &mut Buffer, area: Rect, snapshot: &Snapshot, now: Timestamp) {
         let rows = &snapshot.rows;
@@ -671,6 +637,40 @@ impl Dashboard {
                 .0;
             self.drawn.labels.push((start..x, key));
             x = x.saturating_add(GAP);
+        }
+    }
+
+    /// Draws `snapshot` at `now` into `buf`, which covers the whole terminal, and records what
+    /// it drew where.
+    fn draw(&mut self, buf: &mut Buffer, snapshot: &Snapshot, now: Timestamp) {
+        self.drawn = Drawn::default();
+        let area = *buf.area();
+        if area.is_empty() {
+            return;
+        }
+
+        let mut x = area.x;
+        if snapshot.paused {
+            let paused = "PAUSED";
+            let style = Style::new().add_modifier(Modifier::REVERSED | Modifier::BOLD);
+            x = buf
+                .set_stringn(x, area.y, paused, usize::from(area.width), style)
+                .0;
+            x = x.saturating_add(1);
+        }
+        let status = self.status(snapshot);
+        buf.set_stringn(x, area.y, status, usize::from(area.width), Style::new());
+
+        // Between the status line and the key bar
+        let middle = area.height.saturating_sub(2);
+        let events_height = middle / 3;
+        let table_height = middle - events_height;
+        let table = Rect::new(area.x, area.y + 1, area.width, table_height);
+        self.draw_table(buf, table, snapshot, now);
+        let events = Rect::new(area.x, table.bottom(), area.width, events_height);
+        self.draw_events(buf, events, &snapshot.events);
+        if area.height >= 2 {
+            self.draw_key_bar(buf, area.bottom() - 1, area, snapshot.paused);
         }
     }
 
@@ -893,7 +893,7 @@ impl Dashboard {
 /// sending the error) or nothing receives them.
 ///
 /// On a terminal that has hung up, `event::read` of crossterm 0.29 never returns and keeps a CPU
-/// busy (crossterm issue 1067). So this runs on a thread of its own, which ends with the process,
+/// busy (crossterm#1067). So this runs on a thread of its own, which ends with the process,
 /// and the dashboard does not depend on it to end.
 fn read_inputs(inputs: Sender<io::Result<Input>>) {
     loop {

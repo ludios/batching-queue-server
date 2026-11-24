@@ -234,7 +234,9 @@ fn exit_signal() -> Result<impl Future<Output = ()>> {
 
 /// Switches the terminal to the dashboard of `server`, which was started with `args`.
 ///
-/// `quit` receives a message when the operator chooses to quit.
+/// Through `quit`, the dashboard asks the server to exit cleanly.
+///
+/// Returns the running dashboard, which is to be finished after the final save.
 fn start_dashboard(
     args: &Args,
     server: &Server,
