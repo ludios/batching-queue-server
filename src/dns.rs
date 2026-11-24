@@ -17,70 +17,24 @@ const MAX_RUNNING: usize = 8;
 /// How long a lookup may run before it is given up. Its wait for a turn does not count.
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The longest that the system's resolver waits for the answer to one DNS query before it tries
+/// again: short enough that a second try fits in `TIMEOUT`, so that one lost packet does not
+/// cost a client its name for the whole run.
+const TRY_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// The most `char`s of a name that are kept: its last ones, because the domain is at the end.
 const MAX_NAME_CHARS: usize = 255;
 
 /// Asks the DNS for the `PTR` records of an IP address.
 ///
-/// Returns the records of the answer in their order, or the reason why there is no answer.
+/// Returns the records of the answer in their order, or the reason why there isn't an answer.
 pub type LookUp =
     Arc<dyn Fn(IpAddr) -> Pin<Box<dyn Future<Output = Result<Vec<Record>>> + Send>> + Send + Sync>;
 
-/// Looks up the reverse DNS names of client IP addresses in the background, at most
-/// `MAX_RUNNING` at the same time.
-pub struct Resolver {
-    look_up: LookUp,
-    /// One permit for each lookup that may run.
-    permits: Arc<Semaphore>,
-}
-
-impl Resolver {
-    pub fn new(look_up: LookUp) -> Resolver {
-        Resolver {
-            look_up,
-            permits: Arc::new(Semaphore::new(MAX_RUNNING)),
-        }
-    }
-
-    /// Returns a resolver that uses the resolver configuration of the system. If that cannot be
-    /// set up, the resolver finds no name for any client.
-    pub fn system() -> Resolver {
-        let resolver = TokioResolver::builder_tokio().and_then(|builder| builder.build());
-        let look_up: LookUp = match resolver {
-            Ok(resolver) => Arc::new(move |ip| {
-                let resolver = resolver.clone();
-                Box::pin(async move { Ok(resolver.reverse_lookup(ip).await?.answers().to_vec()) })
-            }),
-            Err(error) => {
-                tracing::warn!("cannot set up the DNS resolver, so no client gets a name: {error}");
-                Arc::new(|_| Box::pin(async { Err(anyhow!("the DNS resolver is not available")) }))
-            }
-        };
-        Resolver::new(look_up)
-    }
-
-    /// Looks up the name of the client at `ip` in the background, then stores what was found in
-    /// the state of `shared` (see `State::set_host`), whose lookup of `ip` must have started
-    /// (see `State::start_lookup`).
-    pub fn spawn(&self, shared: Arc<Shared>, ip: IpAddr) {
-        let look_up = self.look_up.clone();
-        let permits = self.permits.clone();
-        tokio::spawn(async move {
-            let _permit = permits.acquire_owned().await.expect("never closed");
-            let host = match tokio::time::timeout(TIMEOUT, look_up(ip)).await {
-                Ok(Ok(answer)) => host_from_answer(&answer),
-                // Failed, or given up
-                Ok(Err(_)) | Err(_) => Host::NoName,
-            };
-            shared.state.lock().unwrap().set_host(ip, host);
-        });
-    }
-}
-
 /// Returns the target name of the first `PTR` record in `answer` (skipping records of every
 /// other type), in ASCII form, without its final `.`, cleaned by `state::clean_for_terminal`,
-/// and cut to its last `MAX_NAME_CHARS` `char`s; or `Host::NoName` if there is no such record
-/// or its name is empty.
+/// and cut to its last `MAX_NAME_CHARS` `char`s; or `Host::NoName` if `answer` doesn't have a
+/// `PTR` record or its name is empty.
 fn host_from_answer(answer: &[Record]) -> Host {
     let name = answer.iter().find_map(|record| match &record.data {
         RData::PTR(ptr) => Some(&ptr.0),
@@ -89,10 +43,12 @@ fn host_from_answer(answer: &[Record]) -> Host {
     let Some(name) = name else {
         return Host::NoName;
     };
-    // The ASCII form escapes every byte that is not printable ASCII as `\DDD`, and keeps
-    // internationalized labels as `xn--…`, so that each `char` is one screen column
+    // The ASCII form keeps internationalized labels as `xn--…` and escapes every other byte
+    // that is not a letter, a digit, `-`, or `_`: as `\` and the byte if it is printable, or
+    // else as `\` and three octal digits. So each `char` takes one screen column.
     let ascii = name.to_ascii();
     let ascii = ascii.strip_suffix('.').unwrap_or(&ascii);
+    // Doesn't change the ASCII form, but keeps the terminal safe whatever that form becomes
     let cleaned = state::clean_for_terminal(ascii.as_bytes(), usize::MAX);
     let length = cleaned.chars().count();
     let name: String = cleaned
@@ -103,6 +59,64 @@ fn host_from_answer(answer: &[Record]) -> Host {
         Host::NoName
     } else {
         Host::Name(name)
+    }
+}
+
+/// Looks up the reverse DNS names of client IP addresses in the background, at most
+/// `MAX_RUNNING` at the same time.
+#[derive(Clone)]
+pub struct Resolver {
+    look_up: LookUp,
+    /// One permit for each lookup that may run.
+    permits: Arc<Semaphore>,
+}
+
+impl Resolver {
+    /// `look_up` does each lookup, once the lookup has its turn. An error from it gives the
+    /// client `Host::NoName`.
+    pub fn new(look_up: LookUp) -> Resolver {
+        Resolver {
+            look_up,
+            permits: Arc::new(Semaphore::new(MAX_RUNNING)),
+        }
+    }
+
+    /// Returns a resolver that uses the resolver configuration of the system, or the error that
+    /// keeps it from being set up.
+    pub fn system() -> Result<Resolver> {
+        let mut builder = TokioResolver::builder_tokio()?;
+        let options = builder.options_mut();
+        options.timeout = options.timeout.min(TRY_TIMEOUT);
+        let resolver = builder.build()?;
+        Ok(Resolver::new(Arc::new(move |ip| {
+            let resolver = resolver.clone();
+            Box::pin(async move { Ok(resolver.reverse_lookup(ip).await?.answers().to_vec()) })
+        })))
+    }
+
+    /// Returns a resolver that doesn't find a name for any client, for use when the system's
+    /// resolver cannot be set up.
+    pub fn unavailable() -> Resolver {
+        Resolver::new(Arc::new(|_| {
+            Box::pin(async { Err(anyhow!("the DNS resolver is not available")) })
+        }))
+    }
+
+    /// Looks up the name of the client at `ip` in the background, then stores what was found in
+    /// the state of `shared` (see `State::set_host`), in which `ip` must have been marked for a
+    /// lookup (see `State::mark_for_lookup`).
+    pub fn spawn(&self, shared: Arc<Shared>, ip: IpAddr) {
+        let resolver = self.clone();
+        tokio::spawn(async move {
+            let permit = resolver.permits.acquire().await.expect("never closed");
+            let host = match tokio::time::timeout(TIMEOUT, (resolver.look_up)(ip)).await {
+                Ok(Ok(answer)) => host_from_answer(&answer),
+                // Failed, or given up
+                Ok(Err(_)) | Err(_) => Host::NoName,
+            };
+            drop(permit);
+            shared.state.lock().unwrap().set_host(ip, host);
+        });
     }
 }
 
@@ -130,14 +144,14 @@ mod tests {
         record(RData::PTR(PTR(Name::from_ascii(name).unwrap())))
     }
 
-    /// Returns a lookup function that answers the lookup of each IP address with what `answer`
-    /// returns for it.
-    fn look_up<F, A>(answer: F) -> LookUp
+    /// Returns a resolver that answers the lookup of each IP address with what `answer` returns
+    /// for it.
+    fn resolver<F, A>(answer: F) -> Resolver
     where
         F: Fn(IpAddr) -> A + Send + Sync + 'static,
         A: Future<Output = Result<Vec<Record>>> + Send + 'static,
     {
-        Arc::new(move |ip| Box::pin(answer(ip)))
+        Resolver::new(Arc::new(move |ip| Box::pin(answer(ip))))
     }
 
     /// Returns the IP address of test client `n`.
@@ -150,26 +164,21 @@ mod tests {
         format!("client-{n}.example.com.")
     }
 
-    /// Creates a server of 100 lines that looks up host names with `look_up` and starts with the
+    /// Creates a server of 100 lines that looks up host names with `resolver` and starts with the
     /// client records `clients`.
-    fn server(look_up: LookUp, clients: BTreeMap<IpAddr, Client>) -> TestServer {
+    fn server(resolver: Resolver, clients: BTreeMap<IpAddr, Client>) -> TestServer {
         let contents: String = (0..100).map(|i| format!("{i}\n")).collect();
         let config = Config {
             path: "/".to_owned(),
             max_batch: 10,
         };
-        server_with(
-            &contents,
-            false,
-            config,
-            clients,
-            Some(Resolver::new(look_up)),
-        )
+        server_with(&contents, false, config, clients, Some(resolver))
     }
 
     impl TestServer {
-        /// Sends a GET from `ip` and checks that it gets a line at once.
-        async fn get_from(&self, ip: IpAddr) {
+        /// Sends a GET from `ip`, which may be written in any form that `IpAddr` parses, and
+        /// checks that it gets lines at once.
+        async fn get_from(&self, ip: impl ToString) {
             let response = self.request(&ip.to_string(), Method::GET, "/").await;
             assert_eq!(response.status, StatusCode::OK);
             assert!(!response.body.is_empty());
@@ -188,7 +197,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn each_client_is_looked_up_once_at_its_first_request_in_this_run() {
         let looked_up = Arc::new(Mutex::new(Vec::new()));
-        let look_up = look_up({
+        let resolver = resolver({
             let looked_up = looked_up.clone();
             move |ip| {
                 looked_up.lock().unwrap().push(ip);
@@ -204,7 +213,7 @@ mod tests {
             last_seen: time,
             user_agent: None,
         };
-        let server = server(look_up, BTreeMap::from([(ip(2), loaded)]));
+        let server = server(resolver, BTreeMap::from([(ip(2), loaded)]));
 
         sleep(10.0).await;
         assert!(looked_up.lock().unwrap().is_empty());
@@ -218,6 +227,11 @@ mod tests {
             Host::Name("client.example.com".to_owned())
         );
         assert_eq!(server.host(ip(2)), Host::NotLookedUp);
+        // After the lookup has finished, and through an IPv4-mapped IPv6 address
+        server.get_from(ip(1)).await;
+        server.get_from("::ffff:203.0.113.1").await;
+        sleep(1.0).await;
+        assert_eq!(*looked_up.lock().unwrap(), [ip(1)]);
 
         server.get_from(ip(2)).await;
         server.get_from(ip(2)).await;
@@ -231,8 +245,18 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_request_does_not_wait_for_its_lookup() {
-        let server = server(look_up(|_| std::future::pending()), BTreeMap::new());
+        let looked_up = Arc::new(AtomicUsize::new(0));
+        let resolver = resolver({
+            let looked_up = looked_up.clone();
+            move |_| {
+                looked_up.fetch_add(1, Ordering::SeqCst);
+                std::future::pending()
+            }
+        });
+        let server = server(resolver, BTreeMap::new());
         server.get_from(ip(1)).await;
+        sleep(1.0).await;
+        assert_eq!(looked_up.load(Ordering::SeqCst), 1);
         assert_eq!(server.host(ip(1)), Host::NotLookedUp);
     }
 
@@ -252,7 +276,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn names_are_not_saved() {
         let server = server(
-            look_up(|_| async { Ok(vec![ptr("client.example.com.")]) }),
+            resolver(|_| async { Ok(vec![ptr("client.example.com.")]) }),
             BTreeMap::new(),
         );
         server.get_from(ip(1)).await;
@@ -271,7 +295,7 @@ mod tests {
     async fn at_most_8_lookups_run_at_the_same_time() {
         let running = Arc::new(AtomicUsize::new(0));
         let most_running = Arc::new(AtomicUsize::new(0));
-        let look_up = look_up({
+        let resolver = resolver({
             let running = running.clone();
             let most_running = most_running.clone();
             move |ip| {
@@ -287,12 +311,12 @@ mod tests {
                 }
             }
         });
-        let server = server(look_up, BTreeMap::new());
+        let server = server(resolver, BTreeMap::new());
         for n in 1..=20 {
             server.get_from(ip(n)).await;
         }
         sleep(10.0).await;
-        assert_eq!(most_running.load(Ordering::SeqCst), MAX_RUNNING);
+        assert_eq!(most_running.load(Ordering::SeqCst), 8);
         for n in 1..=20 {
             let expected = name(n).trim_end_matches('.').to_owned();
             assert_eq!(server.host(ip(n)), Host::Name(expected));
@@ -301,10 +325,10 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_lookup_is_given_up_5_seconds_after_it_started_running() {
-        // Clients 1 to 16 get no answer, so client 17 waits 10 seconds for its turn, and then
+        // Clients 1 to 16 never get an answer, so client 17 waits 10 seconds for its turn, and then
         // gets its answer after 4 more seconds
         let server = server(
-            look_up(|ip| async move {
+            resolver(|ip| async move {
                 if ip != self::ip(17) {
                     std::future::pending::<()>().await;
                 }
@@ -320,10 +344,7 @@ mod tests {
         let expected = |no_names: usize, name: Option<&str>| {
             let mut hosts = vec![Host::NoName; no_names];
             hosts.resize(16, Host::NotLookedUp);
-            hosts.push(match name {
-                Some(name) => Host::Name(name.to_owned()),
-                None => Host::NotLookedUp,
-            });
+            hosts.push(name.map_or(Host::NotLookedUp, |name| Host::Name(name.to_owned())));
             hosts
         };
 
@@ -342,7 +363,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_cname_record_before_the_ptr_record_is_skipped() {
         let server = server(
-            look_up(|_| async {
+            resolver(|_| async {
                 let alias = Name::from_ascii("1.0-25.113.0.203.in-addr.arpa.").unwrap();
                 Ok(vec![record(RData::CNAME(CNAME(alias))), ptr(&name(1))])
             }),
@@ -357,11 +378,8 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn without_a_resolver_every_client_is_looked_up_without_a_name() {
-        let server = server(
-            look_up(|_| async { Err(anyhow!("the DNS resolver is not available")) }),
-            BTreeMap::new(),
-        );
+    async fn an_unavailable_resolver_finds_no_name_and_the_server_keeps_serving() {
+        let server = server(Resolver::unavailable(), BTreeMap::new());
         for n in 1..=3 {
             server.get_from(ip(n)).await;
             server.get_from(ip(n)).await;
@@ -409,7 +427,7 @@ mod tests {
         let Host::Name(cut) = host_from_answer(&[ptr_of(labels)]) else {
             panic!("a long name is a name");
         };
-        assert_eq!(cut.chars().count(), MAX_NAME_CHARS);
+        assert_eq!(cut.chars().count(), 255);
         let whole = format!("{}.example.com", vec![r"\233".repeat(63); 3].join("."));
         assert!(whole.ends_with(&cut), "{cut}");
         assert!(!cut.chars().any(char::is_control), "{cut}");

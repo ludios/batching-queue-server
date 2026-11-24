@@ -123,7 +123,7 @@ fn deserialize_clients<'de, D: Deserializer<'de>>(
 pub enum Host {
     /// Not looked up yet in this run of the server, or the lookup has not finished.
     NotLookedUp,
-    /// Looked up, without a name: no `PTR` record, an error, or given up.
+    /// Looked up, without a name: no `PTR` record, an empty name, an error, or given up.
     NoName,
     /// Looked up, with this name, cleaned by `clean_for_terminal`.
     Name(String),
@@ -297,8 +297,9 @@ pub struct State {
     /// for each IP address that has made a request since.
     clients: BTreeMap<IpAddr, Client>,
     view: View,
-    /// The reverse DNS names of the clients whose lookup has started in this run of the server:
-    /// `Host::NotLookedUp` until it has finished. Never saved.
+    /// What the reverse DNS lookup found, for each client that has been marked for a lookup in
+    /// this run of the server (see `mark_for_lookup`): `Host::NotLookedUp` while its lookup waits
+    /// for its turn or runs. Never saved.
     hosts: HashMap<IpAddr, Host>,
     /// The most recent requests, at most `MAX_EVENTS`, in the order they were recorded.
     events: VecDeque<Event>,
@@ -486,11 +487,11 @@ impl State {
         }
     }
 
-    /// Notes that the reverse DNS lookup of the client at `ip` (in its canonical form) starts,
-    /// unless it has started before in this run of the server.
+    /// Marks the client at `ip` (in its canonical form) for a reverse DNS lookup, unless it has
+    /// been marked before in this run of the server.
     ///
-    /// Returns whether it starts, so that the caller runs it.
-    pub fn start_lookup(&mut self, ip: IpAddr) -> bool {
+    /// Returns whether it has been marked now, so that the caller looks it up.
+    pub fn mark_for_lookup(&mut self, ip: IpAddr) -> bool {
         assert_eq!(ip, ip.to_canonical(), "the IP address must be canonical");
         if self.hosts.contains_key(&ip) {
             return false;
@@ -499,15 +500,19 @@ impl State {
         true
     }
 
-    /// Stores `host`, which the reverse DNS lookup of the client at `ip` found. That lookup must
-    /// have started (see `start_lookup`) and not have finished before.
+    /// Stores `host`, which the reverse DNS lookup of the client at `ip` found. That client must
+    /// have been marked for a lookup (see `mark_for_lookup`), and its lookup must not have
+    /// finished before.
     pub fn set_host(&mut self, ip: IpAddr, host: Host) {
         assert_ne!(
             host,
             Host::NotLookedUp,
             "a finished lookup found a name or none"
         );
-        let entry = self.hosts.get_mut(&ip).expect("the lookup has started");
+        let entry = self
+            .hosts
+            .get_mut(&ip)
+            .expect("the client was marked for a lookup");
         assert_eq!(*entry, Host::NotLookedUp, "a client is looked up only once");
         *entry = host;
     }

@@ -33,8 +33,8 @@ struct App {
     shared: Arc<Shared>,
     config: Arc<Config>,
     /// Looks up the reverse DNS name of each client at its first request in this run of the
-    /// server. None when nothing shows the names.
-    resolver: Option<Arc<Resolver>>,
+    /// server. None without a dashboard, which is the only place that shows the names.
+    resolver: Option<Resolver>,
     /// Where the handler sends an error that must stop the server.
     fatal: UnboundedSender<anyhow::Error>,
 }
@@ -186,7 +186,7 @@ async fn handle(
         if let Ok(Some(reply)) = &decided {
             state.record_outcome(ip, now, Instant::now(), reply.outcome());
             if let Some(resolver) = &app.resolver
-                && state.start_lookup(ip)
+                && state.mark_for_lookup(ip)
             {
                 resolver.spawn(app.shared.clone(), ip);
             }
@@ -223,7 +223,7 @@ pub fn router(
     let app = App {
         shared,
         config: Arc::new(config),
-        resolver: resolver.map(Arc::new),
+        resolver,
         fatal,
     };
     // A fallback rather than a route, so that every request, whatever its method and path,

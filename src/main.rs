@@ -148,6 +148,15 @@ fn start(args: &Args, look_up_hosts: bool) -> Result<Server> {
     let loaded = loaded.unwrap_or_default();
     let queue = Queue::open(&args.item_file, loaded.position, args.cycle)?;
     let listener = bind(args.port)?;
+    let resolver = look_up_hosts.then(|| {
+        dns::Resolver::system().unwrap_or_else(|error| {
+            print_line(&format!(
+                "cannot set up the DNS resolver, so the dashboard won't show a host name for \
+                 any client: {error:#}"
+            ));
+            dns::Resolver::unavailable()
+        })
+    });
 
     let total = queue.total();
     let state = State::new(queue, loaded.wraps, loaded.clients, loaded.view);
@@ -167,7 +176,6 @@ fn start(args: &Args, look_up_hosts: bool) -> Result<Server> {
         path: args.path.clone(),
         max_batch: args.max_batch,
     };
-    let resolver = look_up_hosts.then(dns::Resolver::system);
     let router = http::router(shared.clone(), config, resolver, fatal_sender.clone());
     Ok(Server {
         shared,
