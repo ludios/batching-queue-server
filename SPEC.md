@@ -23,10 +23,10 @@ The operator will read and maintain this code. Prefer the plainest design that m
 - No rate limiting. No automatic blocking. No client nicknames. No block list shared between instances.
 - The dashboard is a TUI inside the server process. No web UI.
 - The User-Agent column is hidden by default and can be toggled.
-- The sort column, the sort direction, and which optional columns are shown are remembered across restarts.
+- The sort column, the sort direction, and whether the `HOST` and `UA` columns are shown are remembered across restarts.
 - The clients table has a column with the reverse DNS name of each IP.
 - Sorting works like `htop`: click a column header, or use function keys.
-- Every setting is a command-line option. No setting is taken from an environment variable.
+- Every setting of the server is a command-line option. No setting is taken from an environment variable. (The view settings of the dashboard are in the state file.)
 - Cycling is off unless `--cycle` is given. (In the Node version it was on by default.)
 
 ## Command line
@@ -43,7 +43,7 @@ batching-queue-server [OPTIONS] ITEM_FILE
 | `--max-batch N` | `10000` | Upper limit on the number of lines in one response. Must be at least 1. |
 | `--path PATH` | `/` | The only request path at which lines are handed out; every other path gets `403`. A long random value such as `/k3v9x2m7q4w8` keeps strangers out. It must start with `/`, consist only of `/` and the characters `A` to `Z`, `a` to `z`, `0` to `9`, `-`, `_`, `.`, and `~`, and have no segment that is `.` or `..`; any other value is an argument error. (Clients send exactly these characters unchanged. Other characters are rewritten or rejected on the way, so a path containing them could never match.) |
 
-Use `clap` (derive). Every setting is an option; no setting is taken from an environment variable.
+Use `clap` (derive). Every setting of the server is an option; no setting is taken from an environment variable.
 
 `ITEM_FILE` is the only positional argument; a second one is an argument error.
 
@@ -170,6 +170,7 @@ The dashboard shows the reverse DNS name (the PTR record) of each client IP, as 
 - So a client is in one of three states: not looked up yet; looked up, with a name; looked up, without a name (no `PTR` record, an error, or given up).
 - Names are kept in memory only. They are not saved in the state file.
 - Without a dashboard, do no lookups.
+- With a dashboard, lookups run whether or not the `HOST` column is shown.
 - The name is not verified: nothing checks that the name resolves back to the IP, so the owner of an address can publish any name. The README must say this.
 
 ### Events
@@ -220,11 +221,11 @@ One file holds everything that survives a restart: the position, the wrap counte
 
 Timestamps are UTC in the RFC 3339 form shown. Counters and the position are unsigned 64-bit integers.
 
-`view` holds what the operator chose in the dashboard (see "Clients table"):
+`view` holds the view settings of the dashboard (see "Clients table"). They are part of the shared state, like the clients, so that every save includes them. A server running without a dashboard keeps the loaded view settings and saves them back unchanged.
 
 | Field | Meaning | Value without a saved `view` |
 |---|---|---|
-| `sort_column` | The sort column: one of `blocked` (the first column), `ip`, `items`, `first`, `last`, `reqs`, `host`. | `items` |
+| `sort_column` | The sort column: one of `blocked` (the first column), `ip`, `items`, `first_seen`, `last_seen`, `requests`, `host`. | `items` |
 | `sort_inverted` | `false` when the order is the sort column's "direction when first chosen", `true` when it is the opposite. | `false` |
 | `show_host` | Whether the `HOST` column is shown. | `true` |
 | `show_ua` | Whether the `UA` column is shown. | `false` |
@@ -244,8 +245,8 @@ Use the file locking of the standard library (`File::try_lock`) if the Rust vers
 
 ### Loading at startup
 
-- Opening the file fails because it does not exist: position 0, wrap counter 0, no clients. Any other error from opening or reading it is a startup error. (Do not use a check like `Path::exists`, which also reports "does not exist" for a file that exists but cannot be read.)
-- Otherwise the file must be a JSON object with these four fields: `version` equal to 1, `position`, `wraps`, and `clients`. Every client must have all six fields; `user_agent` is `null` for a client without one. `view` is the only field that may be absent; then the values of the table above apply. If `view` is present, it must have all four of its fields, and `sort_column` must be one of the listed names. An empty file, damaged JSON, another `version`, a missing field (other than `view`), or a value of the wrong type is a startup error. Never silently restart at line 0 and never silently discard a block list.
+- Opening the file fails because it does not exist: position 0, wrap counter 0, no clients, and the view settings of the table above. Any other error from opening or reading it is a startup error. (Do not use a check like `Path::exists`, which also reports "does not exist" for a file that exists but cannot be read.)
+- Otherwise the file must be a JSON object with these four fields: `version` equal to 1, `position`, `wraps`, and `clients`. Every client must have all six fields; `user_agent` is `null` for a client without one. `view` is the only field that may be absent; then the values of the table above apply. If `view` is present, it must have all four of its fields, and `sort_column` must be one of the listed names. `"view": null` is not accepted. A saved view whose sort column is hidden (`"sort_column": "host"` with `"show_host": false`) is valid and is used as saved. An empty file, damaged JSON, another `version`, a missing field (other than `view`), an unknown field at any level, or a value of the wrong type is a startup error. Take care with `user_agent`: with serde's derive, a missing `Option` field loads as `None` without an error, so it needs explicit handling to be required. Never silently restart at line 0 and never silently discard a block list.
 - A `position` greater than the number of lines in the item file is a startup error.
 - Loaded data is treated like live data: convert every IP key with `IpAddr::to_canonical` (two keys that become equal are a startup error), and pass every `user_agent` through the same cleaning as a live header.
 - If `--state-file` names the item file itself, exit with an error before reading or writing anything.
@@ -334,8 +335,8 @@ Columns, left to right:
 | `HOST` | the reverse DNS name; `-` when the lookup found none; empty while the client has not been looked up | the whole name (not the shortened form on screen), ignoring case, compared label by label from the last label to the first: `host.example.com` compares as the list `com`, `example`, `host`. So clients of one domain are adjacent. Compare lists, not joined strings, because `-` sorts before `.`. Clients without a name are equal to each other and come after all clients with a name, in both directions. | ascending |
 | `UA` | `user_agent`, or `-` | not sortable | |
 
-- The `HOST` column is shown unless the saved view settings say otherwise, and can be hidden. Its width is that of the longest name in it, but at least that of its header and at most 40 columns. A longer name is shown as `…` followed by its last 39 characters, because the domain is at the end.
-- The `UA` column is hidden unless the saved view settings say otherwise. When shown, it takes the remaining width and is truncated.
+- At startup, the `HOST` column is shown unless the saved view settings say otherwise. It can be hidden and shown again with a key. Its width is that of the longest name in it, but at least that of its header and at most 40 columns. A longer name is shown as `…` followed by its last 39 characters, because the domain is at the end.
+- At startup, the `UA` column is hidden unless the saved view settings say otherwise. It can be shown and hidden again with a key. When shown, it takes the remaining width and is truncated.
 - A hidden column cannot become the sort column. If the sort column gets hidden, the rows stay sorted by it in the same direction, and no header carries `▼` or `▲`. `F6` then moves on to the next shown sortable column to the right of it, wrapping around.
 - Ages show only their largest unit: `42s`, `17m`, `5h` (below 48 hours), `12d`.
 - Column widths adapt to their content. Columns that do not fit in the window are cut off on the right.
@@ -405,9 +406,9 @@ Verified on docs.rs: `ratatui::init()` enables raw mode and the alternate screen
 Suggested shape (adjust if something simpler emerges):
 
 - `queue.rs`: the item file reader and the in-memory position. No knowledge of HTTP, clients, or the state file.
-- `state.rs`: clients, events, rates, and loading and saving the state file.
+- `state.rs`: clients, events, rates, the saved view settings, and loading and saving the state file.
 - `http.rs`: the one handler that serves every request.
-- `tui.rs`: drawing as a function of (view settings, state, current time); input handling as a function from an input event to an action.
+- `tui.rs`: drawing as a function of (state, selection, current time); input handling as a function from an input event to an action.
 - `main.rs`: arguments, startup checks, wiring, shutdown.
 
 One `std::sync::Mutex` around the shared state is enough; never hold it across an `.await`. The HTTP handler may do its small synchronous reads of the item file while holding it; that is a deliberate simplification. The dashboard runs on its own thread. For each frame it copies what it needs while holding the lock, and writes to the terminal after releasing it: a terminal that stops reading (for example a stalled SSH session) must not stall requests.
@@ -467,12 +468,13 @@ Required, at minimum:
 
 **State file** (every test uses an item file in its own fresh temporary directory, because the default state file is written next to the item file)
 
-- Save and load round trip, including the position, the wrap counter, and the view settings. Missing file: position 0, no clients, and the default view settings. A file without `view`: the default view settings.
-- Startup errors: an empty file; damaged JSON; a wrong `version`; a missing field; a `view` with an unknown `sort_column`; a file holding only digits (a Node position file); a directory at the state file path; a `position` greater than the line count; `--state-file` naming the item file; a state file path whose parent directory does not exist (this is how to test "cannot be written"; a read-only directory is still writable for root).
+- Save and load round trip, including the position, the wrap counter, and view settings that all differ from the defaults. Missing file: position 0, no clients, and the default view settings. A file without `view`: the default view settings.
+- Startup errors: an empty file; damaged JSON; a wrong `version`; a missing field; a `view` with an unknown `sort_column`, with `"sort_column": "ua"`, without one of its four fields, or with a field of the wrong type; `"view": null`; an unknown field; a client without `user_agent`; a file holding only digits (a Node position file); a directory at the state file path; a `position` greater than the line count; `--state-file` naming the item file; a state file path whose parent directory does not exist (this is how to test "cannot be written"; a read-only directory is still writable for root).
 - A startup that fails leaves an existing state file unchanged.
 - While one server runs, a second server with the same state file exits with a startup error and changes neither the state file nor the first server's behavior. After the first server has ended, in any way, a new server starts normally although the lock file still exists.
 - Through the whole server: hand out some lines, exit cleanly, start again with the same state file, and the next request continues with the next line; with `--cycle` and at least one wrap, the wrap counter is kept too. Without `--cycle`, a request after the last line gets an empty batch and the position stays at the end.
-- With paused time: after a hand-out, once 30 seconds have passed and the save that started then has finished, the file on disk holds the new position, without an exit. The file is not rewritten between two such saves, and not at all while nothing in the saved data changes. After a block, an unblock, or a wrap, the file on disk holds the change without waiting for the 30 seconds.
+- With paused time: after a hand-out, once 30 seconds have passed and the save that started then has finished, the file on disk holds the new position, without an exit. The file is not rewritten between two such saves, and not at all while nothing in the saved data changes. A change of a view setting alone, with no request, is on disk after the next 30 second save. After a block, an unblock, or a wrap, the file on disk holds the change without waiting for the 30 seconds.
+- A server without a dashboard that loads non-default view settings writes the same view settings in its saves.
 - A start from a snapshot that is older than the last hand-outs repeats those lines and skips none.
 - Without `--state-file`, the state file for `items.txt` is `items.txt.bqs.json` (append to the whole path; `Path::with_extension` would give `items.bqs.json`). A second positional argument is an argument error.
 
@@ -481,7 +483,7 @@ Required, at minimum:
 - Clicking a header sorts by that column; clicking it again inverts; `F6`, `F7` do the same by keyboard.
 - Clicking `[block]` in a row that is not selected only selects that client. Clicking `[block]` in the selected row blocks exactly that IP, also when new data arrived after the frame was drawn and would re-sort the rows.
 - The selection stays on the same IP when the rows re-sort.
-- A dashboard started from saved view settings shows that sort column, that direction, and those columns; changing them changes what the next save writes.
+- A dashboard started from saved view settings shows that sort column, that direction, and those columns, with the rows in that order, also when the saved sort column is hidden; changing them changes what the next save writes.
 - `F2` shows and hides the `UA` column; `F3` shows and hides the `HOST` column.
 - Sorting by `HOST` puts `b.example.com` next to `a.example.com` and before `a.example.net`, keeps `a.foo-bar.com` and `b.foo-bar.com` adjacent although `c.foo.com` exists, and puts clients without a name last in both directions. The `HOST` cell is `-` for a client looked up without a name and empty for a client not looked up. A name longer than the column shows its end.
 - `F5` pauses and resumes; while paused, the status line starts with `PAUSED` and the key bar shows `F5 Resume`.
@@ -504,7 +506,7 @@ Required, at minimum:
 
 Suggested commit sequence, one logical change each:
 
-1. The Rust server without client tracking or dashboard, at parity with the Node version plus the listed fixes, with `--path`, with the state file and its lock file (`clients` always `{}` and no `view` at this step, so that the format does not change later), and with the tests that apply at this step.
+1. The Rust server without client tracking or dashboard, at parity with the Node version plus the listed fixes, with `--path`, with the state file and its lock file (`clients` always `{}` at this step, so that the required fields do not change later; `view` is added in step 3), and with the tests that apply at this step.
 2. Client tracking, blocking and pausing in the HTTP handler, and the clients in the state file.
 3. The dashboard, including the pause key, the terminal title, and the saved view settings, with an empty `HOST` column.
 4. Reverse DNS lookups.
