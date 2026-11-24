@@ -47,18 +47,19 @@ Use `clap` (derive). Every setting is an option; no environment variable is read
 
 `ITEM_FILE` is the only positional argument; a second one is an argument error. (The Node version took its position file there.)
 
-Two servers that serve the same item file need different state files; give at least one of them `--state-file`.
+Two servers that serve the same item file need different state files; give at least one of them `--state-file`. A server refuses to start while another running server uses the same state file (see "Lock file").
 
 ### Startup order
 
 1. Parse the arguments.
 2. Open and scan the item file.
-3. Load the state file (see "State file") and check it against the item file.
-4. Bind the port, without accepting connections yet. Listen on the IPv6 wildcard address `[::]` at the `--port` value, for both IPv4 and IPv6. Do not rely on the system default for this: clear `IPV6_V6ONLY` on the socket explicitly (for example with the `socket2` crate). There is no fallback to IPv4 only.
-5. Save the state file once. This makes a state file location that cannot be written a startup error. Because it comes after every other check, a startup that fails changes nothing on disk.
-6. Print one line to stderr that names the state file and says either which position was loaded from it or that it was newly created. Then start the dashboard and accept connections.
+3. Take the lock that belongs to the state file (see "Lock file").
+4. Load the state file (see "State file") and check it against the item file.
+5. Bind the port, without accepting connections yet. Listen on the IPv6 wildcard address `[::]` at the `--port` value, for both IPv4 and IPv6. Do not rely on the system default for this: clear `IPV6_V6ONLY` on the socket explicitly (for example with the `socket2` crate). There is no fallback to IPv4 only.
+6. Save the state file once. This makes a state file location that cannot be written a startup error. Because it comes after every other check, a startup that fails changes nothing on disk, except that it may have created the empty lock file.
+7. Print one line to stderr that names the state file and says either which position was loaded from it or that it was newly created. Then start the dashboard and accept connections.
 
-Argument errors are reported by `clap` in its usual way (its own message, exit status 2). Every other startup error (unreadable item file, invalid or unreadable state file, state file that cannot be written, port in use) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
+Argument errors are reported by `clap` in its usual way (its own message, exit status 2). Every other startup error (unreadable item file, state file in use by another server, invalid or unreadable state file, state file that cannot be written, port in use) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
 
 ## The item queue
 
@@ -225,6 +226,19 @@ Timestamps are UTC in the RFC 3339 form shown. Counters and the position are uns
 | `show_host` | Whether the `HOST` column is shown. | `true` |
 | `show_ua` | Whether the `UA` column is shown. | `false` |
 
+### Lock file
+
+Two servers writing the same state file would overwrite each other's position and block list. A lock file prevents this.
+
+- The lock file's path is the state file's path with `.lock` appended (`items.txt.bqs.json.lock`). It is empty.
+- At startup, before the state file is read, open the lock file, creating it if it does not exist, and try to take an exclusive advisory lock (`flock`) on it without waiting.
+- If another process holds the lock, exit with a startup error that says another server is using this state file, and names the state file.
+- Keep the lock file open, and so locked, until the process ends. The kernel then releases the lock, however the process ends, so a lock can never be left behind by a crash.
+- Never delete the lock file, not at exit either: deleting it would let two servers lock two different files at the same path.
+- The lock file is locked, not the state file, because every save replaces the state file with a new file.
+
+Use the file locking of the standard library (`File::try_lock`) if the Rust version in use has it; otherwise call `flock`.
+
 ### Loading at startup
 
 - Opening the file fails because it does not exist: position 0, wrap counter 0, no clients. Any other error from opening or reading it is a startup error. (Do not use a check like `Path::exists`, which also reports "does not exist" for a file that exists but cannot be read.)
@@ -238,7 +252,7 @@ There is no automatic conversion of a Node position file. The README explains ho
 ### Saving
 
 - Save by writing a temporary file in the same directory, calling `fsync` on it, and renaming it over the state file. Without the `fsync`, a power loss can leave an empty state file on some filesystems.
-- Save once at startup (step 5 of "Startup order").
+- Save once at startup (step 6 of "Startup order").
 - After that, save every 30 seconds if anything in the saved data changed since the last save, immediately when a block or unblock happens, and at every clean exit (see "Exiting"). A changed view setting is a change like any other: it waits for the next of these saves.
 - Every save is one consistent snapshot: the position, the wrap counter, the view settings, and every client record are from the same instant. Take the snapshot while holding the state lock; write it to disk after releasing that lock, so that a slow disk does not stall requests.
 - Two saves must never interleave, and an older snapshot must never overwrite a newer one.
@@ -451,6 +465,7 @@ Required, at minimum:
 - Save and load round trip, including the position, the wrap counter, and the view settings. Missing file: position 0, no clients, and the default view settings. A file without `view`: the default view settings.
 - Startup errors: an empty file; damaged JSON; a wrong `version`; a missing field; a `view` with an unknown `sort_column`; a file holding only digits (a Node position file); a directory at the state file path; a `position` greater than the line count; `--state-file` naming the item file; a state file path whose parent directory does not exist (this is how to test "cannot be written"; a read-only directory is still writable for root).
 - A startup that fails leaves an existing state file unchanged.
+- While one server runs, a second server with the same state file exits with a startup error and changes neither the state file nor the first server's behavior. After the first server has ended, in any way, a new server starts normally although the lock file still exists.
 - Through the whole server: hand out some lines, exit cleanly, start again with the same state file, and the next request continues with the next line; the wrap counter is kept too.
 - With paused time: after a hand-out, the file on disk holds the new position within 30 seconds, without an exit. After a block, the file on disk holds it immediately.
 - A start from a snapshot that is older than the last hand-outs repeats those lines and skips none.
@@ -478,7 +493,7 @@ Required, at minimum:
 ## Deliverables
 
 1. The Rust crate at the repository root, with its `Cargo.lock` committed, building without warnings and passing `cargo clippy` and `cargo test`.
-2. `README.md`: what the server does, how to run it, the HTTP contract, the state file, the dashboard keys, and that reverse DNS names are not verified. The repository has no README today. Include a section "Moving from the Node version": replace the environment variable `PORT` with `--port`; add `--cycle` unless the old launch set `CYCLE=false`, because cycling is now off by default; remove `CYCLE`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
+2. `README.md`: what the server does, how to run it, the HTTP contract, the state file and its lock file, the dashboard keys, and that reverse DNS names are not verified. The repository has no README today. Include a section "Moving from the Node version": replace the environment variable `PORT` with `--port`; add `--cycle` unless the old launch set `CYCLE=false`, because cycling is now off by default; remove `CYCLE`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
 3. Removal of `index.js`, `readlines.js`, `package.json`, and `LICENSE`. That `LICENSE` file is the license of the vendored `readlines.js` only. Do not add a license for the Rust crate; the operator has not chosen one.
 4. `.gitignore` with `target/`.
 
@@ -499,5 +514,4 @@ Do not build these; mention them in your final report if you see a strong reason
 - Filtering or searching the clients table.
 - Removing old client records.
 - Appending to the item file while the server runs.
-- Detecting two servers that use the same state file.
 - Verifying a reverse DNS name with a forward lookup, and saving names across restarts.
