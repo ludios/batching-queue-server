@@ -23,6 +23,7 @@ The operator will read and maintain this code. Prefer the plainest design that m
 - The dashboard is a TUI inside the server process. No web UI.
 - The User-Agent column is hidden by default and can be toggled.
 - Sorting works like `htop`: click a column header, or use function keys.
+- Every setting is a command-line option. No environment variable is read.
 
 ## Command line
 
@@ -30,14 +31,16 @@ The operator will read and maintain this code. Prefer the plainest design that m
 batching-queue-server [OPTIONS] ITEM_FILE
 ```
 
-| Option | Environment variable | Default | Meaning |
-|---|---|---|---|
-| `--state-file FILE` | (none) | the `ITEM_FILE` path with `.bqs.json` appended | Where the state file is. For `/data/items.txt` the default is `/data/items.txt.bqs.json`, in the same directory as the item file. |
-| `--port PORT` | `PORT` | `31417` | TCP port to listen on. |
-| `--cycle BOOL` | `CYCLE` | `true` | `true` or `false`. Whether to start again at the first line after the last line was handed out. Any other value is a startup error. |
-| `--max-batch N` | `MAX_BATCH` | `10000` | Upper limit on the number of lines in one response. Must be at least 1. |
+| Option | Default | Meaning |
+|---|---|---|
+| `--state-file FILE` | the `ITEM_FILE` path with `.bqs.json` appended | Where the state file is. For `/data/items.txt` the default is `/data/items.txt.bqs.json`, in the same directory as the item file. |
+| `--port PORT` | `31417` | TCP port to listen on. |
+| `--no-cycle` | cycling is on | Turn cycling off. With cycling on, the server starts again at the first line after the last line was handed out. With cycling off, it stops handing out lines at the end of the file. |
+| `--max-batch N` | `10000` | Upper limit on the number of lines in one response. Must be at least 1. |
 
-An option given on the command line wins over its environment variable. Use `clap` (derive, with its `env` feature), which provides both forms from one declaration.
+Use `clap` (derive). Every setting is an option; no environment variable is read.
+
+The Node version read the environment variables `PORT` and `CYCLE`. If either of them is set, exit with a startup error that names the option replacing it (`--port`, `--no-cycle`). Otherwise a launch script that was only partly updated would run on the wrong port, or with cycling on by mistake.
 
 `ITEM_FILE` is the only positional argument. The Node version took a second positional argument, the position file. A second positional argument is now a startup error, so that an old launch script cannot run with its position silently ignored. The error message must say that the position file argument was removed, and must point to the README section about moving from the Node version.
 
@@ -45,14 +48,14 @@ Two servers that serve the same item file need different state files; give at le
 
 ### Startup order
 
-1. Parse the arguments.
+1. Parse the arguments, and check that the environment variables `PORT` and `CYCLE` are not set.
 2. Open and scan the item file.
 3. Load the state file (see "State file") and check it against the item file.
-4. Bind the port, without accepting connections yet. Listen on `[::]:PORT` for both IPv4 and IPv6. Do not rely on the system default for this: clear `IPV6_V6ONLY` on the socket explicitly (for example with the `socket2` crate). There is no fallback to IPv4 only.
+4. Bind the port, without accepting connections yet. Listen on the IPv6 wildcard address `[::]` at the `--port` value, for both IPv4 and IPv6. Do not rely on the system default for this: clear `IPV6_V6ONLY` on the socket explicitly (for example with the `socket2` crate). There is no fallback to IPv4 only.
 5. Save the state file once. This makes a state file location that cannot be written a startup error. Because it comes after every other check, a startup that fails changes nothing on disk.
 6. Print one line to stderr that names the state file and says either which position was loaded from it or that it was newly created. Then start the dashboard and accept connections.
 
-Argument errors are reported by `clap` in its usual way (its own message, exit status 2). Every other startup error (unreadable item file, invalid or unreadable state file, state file that cannot be written, port in use) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
+Argument errors are reported by `clap` in its usual way (its own message, exit status 2). Every other startup error (`PORT` or `CYCLE` set, unreadable item file, invalid or unreadable state file, state file that cannot be written, port in use) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
 
 ## The item queue
 
@@ -77,11 +80,11 @@ If the starting position is greater than the number of lines in the item file, e
 To take up to `n` lines:
 
 1. Repeat up to `n` times: try to read the next line. If there is one, add it to the batch and increase the position by 1. If there is none, the end of the file is reached; stop.
-2. If the end of the file was reached, `CYCLE` is `true`, and the position is greater than 0: set the position to 0, open the item file again (see "Item file"), and report a wrap, which increases the wrap counter by 1. Do not continue reading in this request; the lines from the top are served to the next request.
+2. If the end of the file was reached, cycling is on, and the position is greater than 0: set the position to 0, open the item file again (see "Item file"), and report a wrap, which increases the wrap counter by 1. Do not continue reading in this request; the lines from the top are served to the next request.
 
 The end of the file is reached only when an attempt to read a line finds none. A batch that takes exactly the last line has not reached the end; the next request reaches it, gets an empty batch, and causes the wrap. This is what the Node version does.
 
-So a request that reaches the end of the file returns the lines it collected before the end (possibly none). With `CYCLE=false`, the position stays at the end and every later batch is empty.
+So a request that reaches the end of the file returns the lines it collected before the end (possibly none). With cycling off, the position stays at the end and every later batch is empty.
 
 All batches are taken one at a time under one lock. Within one run of the server, two requests must never receive the same line in the same pass, and lines are handed out in file order. (After a crash, some lines are handed out again; see "Saving".)
 
@@ -100,7 +103,7 @@ For each request, the first matching row applies:
 | The batch has at least one line | `200` | `Content-Type: text/plain` | each line followed by `\n` | none | the batch |
 | The batch is empty | `200` | `Content-Type: text/plain` | empty | 1 second | none |
 
-- `max` is optional; when absent it is 1. It is valid when the parameter appears at most once and its URL-decoded value consists of one or more ASCII digits `0` to `9` that form a number from 1 to 2^64 − 1. A valid `max` greater than `MAX_BATCH` is lowered to `MAX_BATCH` (the client asked for "at most `max`" lines, so fewer is within the contract). Everything else is invalid: `0`, a leading `+` or `-`, `1.5`, `1e3`, `0x10`, an empty value, a number above 2^64 − 1, a repeated parameter.
+- `max` is optional; when absent it is 1. It is valid when the parameter appears at most once and its URL-decoded value consists of one or more ASCII digits `0` to `9` that form a number from 1 to 2^64 − 1. A valid `max` greater than the `--max-batch` value is lowered to that value (the client asked for "at most `max`" lines, so fewer is within the contract). Everything else is invalid: `0`, a leading `+` or `-`, `1.5`, `1e3`, `0x10`, an empty value, a number above 2^64 − 1, a repeated parameter.
 - Other query parameters are ignored.
 - A request is counted, and its client record created, when the handler receives it. Requests that the HTTP library rejects before the handler runs (malformed requests) are not counted.
 - `HEAD /` from a client that is not blocked must get `405` and must not consume lines. Verified on docs.rs for axum 0.8.9: a route registered with `routing::get` is also called for `HEAD` requests. Register the handler so that this cannot happen, and test it.
@@ -114,14 +117,15 @@ These were observed by running the Node version:
 
 - `GET /?max=1.5` and `GET /?max=-1` returned every remaining line of the file in one response. Now `400`.
 - `max=` and `max` without a value served 1 line. `max=1e3`, `max=0x10`, `max=+5`, and `max=2.0` served 1000, 16, 5, and 2 lines. `max=0`, `max=abc`, and a repeated `max` got an empty `200` after 1 second. All of these are now `400`.
-- There was no upper limit on `max`. Now `MAX_BATCH`.
+- There was no upper limit on `max`. Now the `--max-batch` value.
 - A `GET` to any path, for example `/favicon.ico`, consumed a line. Now `404`.
 - A request with a method other than `GET` never received a response. Now `405`.
 - Lines that are not valid UTF-8 were sent with each invalid sequence replaced by U+FFFD. Now every line is sent unchanged.
 - The position file was rewritten in place on every `GET`. An empty position file silently restarted the queue at line 0, and a damaged one made the Node version write `NaN` into it. Now the position is saved in the state file every 5 seconds, and a damaged state file is a startup error.
 - The position file was the second positional argument. Now there is a state file, given with `--state-file` or found next to the item file.
+- The port and the cycling setting came from the environment variables `PORT` and `CYCLE`, and every `CYCLE` value except `false` meant cycling on. Now they are the options `--port` and `--no-cycle`.
 
-For valid requests from clients that are not blocked (`GET /` with `max` absent or a number from 1 to `MAX_BATCH`), served from an item file that is valid UTF-8, the response bodies must be byte-identical to the Node version's. After the same sequence of such requests, the position must equal the number in the Node version's position file.
+For valid requests from clients that are not blocked (`GET /` with `max` absent or a number from 1 to the `--max-batch` value), served from an item file that is valid UTF-8, the response bodies must be byte-identical to the Node version's. After the same sequence of such requests, the position must equal the number in the Node version's position file.
 
 ## Client tracking
 
@@ -242,7 +246,7 @@ items.txt :31417  1,234,567/9,876,543 12.5%  wrap 3  412 items/min  38 req/min  
 F2 UA  F6 Sort  F7 Invert  F9 Block  F10 Quit
 ```
 
-1. **Status line** (1 row): item file name without its directory; port; position `/` total lines; percent with one decimal, or `-` when the item file has no lines; wrap counter (omit when `CYCLE=false`); lines handed out in the last 60 seconds; requests in the last 60 seconds; estimated time until the end of the current pass. The estimate is the remaining lines divided by the 60 second rate, shown in the same form as an age (see "Clients table"), or as `-` when that rate is 0.
+1. **Status line** (1 row): item file name without its directory; port; position `/` total lines; percent with one decimal, or `-` when the item file has no lines; wrap counter (omit when cycling is off); lines handed out in the last 60 seconds; requests in the last 60 seconds; estimated time until the end of the current pass. The estimate is the remaining lines divided by the 60 second rate, shown in the same form as an age (see "Clients table"), or as `-` when that rate is 0.
 2. **Clients table**: one header row, then one row per client.
 3. **Events pane**: the most recent events, newest at the bottom, as many as fit.
 4. **Key bar** (1 row).
@@ -356,7 +360,7 @@ Required, at minimum:
 **HTTP** (drive the router directly and supply the peer address yourself, so that tests can act as several client IPs; use tokio's paused time so that the 1 second delays cost nothing)
 
 - Each row of the HTTP contract table, including that the non-`200` rows and `HEAD /` consume no lines.
-- Each kind of invalid `max` listed above, and lowering to `MAX_BATCH`.
+- Each kind of invalid `max` listed above, and lowering to the `--max-batch` value.
 - A blocked IP gets `403` while another IP is served normally; unblocking restores service.
 - Many concurrent requests: every line of the file is handed out exactly once.
 - Counters: `items`, `requests`, `first_seen`, `last_seen`, `user_agent` after a mix of outcomes.
@@ -371,7 +375,7 @@ Required, at minimum:
 - Through the whole server: hand out some lines, exit cleanly, start again with the same state file, and the next request continues with the next line; the wrap counter is kept too.
 - With paused time: after a hand-out, the file on disk holds the new position within 5 seconds, without an exit. After a block, the file on disk holds it immediately.
 - A start from a snapshot that is older than the last hand-outs repeats those lines and skips none.
-- Without `--state-file`, the state file for `items.txt` is `items.txt.bqs.json` (append to the whole path; `Path::with_extension` would give `items.bqs.json`). A second positional argument is an error whose message points to the README.
+- Without `--state-file`, the state file for `items.txt` is `items.txt.bqs.json` (append to the whole path; `Path::with_extension` would give `items.bqs.json`). A second positional argument is an error whose message points to the README. `PORT` or `CYCLE` set in the environment is a startup error whose message names the replacing option.
 
 **Dashboard** (with ratatui's `TestBackend`)
 
@@ -390,7 +394,7 @@ Required, at minimum:
 ## Deliverables
 
 1. The Rust crate at the repository root, with its `Cargo.lock` committed, building without warnings and passing `cargo clippy` and `cargo test`.
-2. `README.md`: what the server does, how to run it, the HTTP contract, the state file, the dashboard keys. The repository has no README today. Include a section "Moving from the Node version": remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
+2. `README.md`: what the server does, how to run it, the HTTP contract, the state file, the dashboard keys. The repository has no README today. Include a section "Moving from the Node version": replace the environment variables `PORT` and `CYCLE=false` with `--port` and `--no-cycle`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
 3. Removal of `index.js`, `readlines.js`, `package.json`, and `LICENSE`. That `LICENSE` file is the license of the vendored `readlines.js` only. Do not add a license for the Rust crate; the operator has not chosen one.
 4. `.gitignore` with `target/`.
 
