@@ -1,7 +1,7 @@
 //! The dashboard: a terminal UI that shows the queue, the clients, and the most recent requests,
 //! and lets the operator block clients, pause the server, and sort the clients table.
 
-use crate::state::{self, Client, Column, Event, Shared, View};
+use crate::state::{self, Client, Column, Event, Outcome, Shared, View};
 use jiff::Timestamp;
 use jiff::tz::TimeZone;
 use ratatui::buffer::Buffer;
@@ -636,7 +636,11 @@ impl Dashboard {
         let top = area.bottom() - u16::try_from(events.len()).expect("as many as fit");
         for ((y, event), ip) in (top..area.bottom()).zip(events).zip(ips) {
             let time = self.time_zone.to_datetime(event.time).strftime("%H:%M:%S");
-            let text = format!("{time} {ip:ip_width$}  {}", event.outcome);
+            let outcome = match event.outcome {
+                Outcome::Lines(lines) => thousands(lines),
+                outcome => outcome.to_string(),
+            };
+            let text = format!("{time} {ip:ip_width$}  {outcome}");
             buf.set_stringn(area.x, y, text, usize::from(area.width), Style::new());
         }
     }
@@ -1019,7 +1023,7 @@ pub fn start(
 mod tests {
     use super::*;
     use crate::queue::Queue;
-    use crate::state::{Outcome, State};
+    use crate::state::State;
     use proptest::prelude::*;
     use ratatui::backend::TestBackend;
     use std::collections::BTreeMap;
@@ -1176,7 +1180,7 @@ mod tests {
     fn layout() {
         let mut test = Test::new(10, true, View::default(), &three_clients());
         test.shared.state.lock().unwrap().set_blocked(B, true);
-        let ips_and_outcomes = [(A, Outcome::Lines(100)), (B, Outcome::Blocked)];
+        let ips_and_outcomes = [(A, Outcome::Lines(1000)), (B, Outcome::Blocked)];
         for (ip, outcome) in ips_and_outcomes {
             test.shared.state.lock().unwrap().record_outcome(
                 ip,
@@ -1188,7 +1192,7 @@ mod tests {
         assert_eq!(
             test.draw(),
             [
-                "items.txt :31417  0/10 0.0%  ETA 6s  100 items/min  2 req/min  wrap 0  3 IPs, 1 blocked",
+                "items.txt :31417  0/10 0.0%  ETA 0s  1,000 items/min  2 req/min  wrap 0  3 IPs, 1 blocked",
                 "           IP            ITEMS▼   FIRST   LAST   REQS  HOST",
                 "[block]    203.0.113.7   12,400      3d     2s    124",
                 "[unblock]  198.51.100.9     300      3d     2s  1,215",
@@ -1197,7 +1201,7 @@ mod tests {
                 "",
                 "",
                 "",
-                "11:59:59 203.0.113.7   100",
+                "11:59:59 203.0.113.7   1,000",
                 "11:59:59 198.51.100.9  blocked",
                 "F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit",
             ]
