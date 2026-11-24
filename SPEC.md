@@ -347,7 +347,7 @@ Columns, left to right:
 - The sort column and direction at startup come from the saved view settings; without them the sort is `ITEMS`, largest first. The header of the sort column carries `▼` when the largest value is first (for the time columns: the most recent; for the first column: blocked) and `▲` for the opposite order. So `IP` ascending and `HOST` ascending carry `▲`. As in `htop`, the header row is black on green across the whole width, and the header of the sort column is black on cyan across the width of its column.
 - Making a column the sort column, by click or by key, always starts with its "direction when first chosen", also when it has been the sort column before.
 - Rows that compare equal are ordered by IP address ascending, so that rows never jitter.
-- One row is selected and highlighted, and the table scrolls to keep it visible. As in `htop`, the selected row is black on cyan across the whole width; if its client is blocked, it is black on red, so that the block state stays visible. With no clients, nothing is selected. When nothing is selected and a client exists, the first row becomes selected.
+- One row is selected and highlighted, and the table scrolls to keep it visible. As in `htop`, the selected row is black on cyan across the whole width; if its client is blocked, it is black on red, so that the block state stays visible. Draw it as reverse video of cyan (or red) on black, so that it stays in reverse video when colors are turned off (`NO_COLOR`). With no clients, nothing is selected. When nothing is selected and a client exists, the first row becomes selected.
 
 **The selection is an IP address, not a row number.** When the rows re-sort, the same IP stays selected. Blocking always acts on the selected IP.
 

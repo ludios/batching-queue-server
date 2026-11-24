@@ -579,12 +579,13 @@ impl Dashboard {
                 style = style.fg(Color::Red);
             }
             if Some(row.ip) == self.selected {
-                // Black on cyan as in htop, but on red for a blocked client, which stays red
-                let mut background = Color::Cyan;
-                if row.client.blocked {
-                    background = Color::Red;
+                // Reverse video of cyan (or the red of a blocked client) on black, which shows
+                // black on cyan as in htop (or black on red). With colors turned off (`NO_COLOR`),
+                // the row is still in reverse video.
+                if !row.client.blocked {
+                    style = style.fg(Color::Cyan);
                 }
-                style = style.fg(Color::Black).bg(background);
+                style = style.bg(Color::Black).add_modifier(Modifier::REVERSED);
             }
             buf.set_style(Rect::new(area.x, y, area.width, 1), style);
             for placed in &columns {
@@ -1371,9 +1372,11 @@ mod tests {
         assert!(!test.is_blocked(A) && !test.is_blocked(C));
         assert_eq!(test.order(), [B, A, C]);
 
-        // The selected row of a blocked client is on red, not on cyan
+        // The selected row of a blocked client is red in reverse video, not cyan
         let (_, b_y) = find(&test.draw(), "198.51.100.9");
-        assert_eq!(test.terminal.backend().buffer()[(0, b_y)].bg, Color::Red);
+        let cell = &test.terminal.backend().buffer()[(0, b_y)];
+        assert!(cell.modifier.contains(Modifier::REVERSED));
+        assert_eq!(cell.fg, Color::Red);
         // A click on the last character of `blocked` in the selected row unblocks
         test.click(6, b_y);
         assert!(!test.is_blocked(B));
@@ -1410,9 +1413,12 @@ mod tests {
         assert_eq!(test.order(), [C, A, B]);
         assert_eq!(test.dashboard.selected, Some(B));
         let buffer = test.terminal.backend().buffer();
-        assert_eq!(buffer[(20, 5)].bg, Color::Cyan);
-        assert_eq!(buffer[(99, 5)].bg, Color::Cyan);
-        assert_eq!(buffer[(20, 3)].bg, Color::Reset);
+        for x in [20, 99] {
+            assert!(buffer[(x, 5)].modifier.contains(Modifier::REVERSED));
+            assert_eq!(buffer[(x, 5)].fg, Color::Cyan);
+            assert_eq!(buffer[(x, 5)].bg, Color::Black);
+        }
+        assert!(!buffer[(20, 3)].modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
