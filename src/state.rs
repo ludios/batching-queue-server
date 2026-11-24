@@ -855,15 +855,24 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_changed_view_is_saved_like_any_other_change() {
+    #[tokio::test(start_paused = true)]
+    async fn a_changed_view_alone_is_saved_at_the_next_periodic_save() {
         let (_dir, shared) = setup(3);
-        let mut state = shared.state.lock().unwrap();
-        state.set_view(View::default());
-        assert!(!state.dirty);
-        state.set_view(VIEW);
-        assert!(state.dirty);
-        assert_eq!(state.view(), VIEW);
+        shared.save().unwrap();
+        let saved = inode(shared.path());
+        tokio::spawn(save_periodically(shared.clone()));
+
+        // Setting the same view is no change. (The extra second keeps the steps below off the
+        // instants of the periodic saves.)
+        shared.state.lock().unwrap().set_view(View::default());
+        tokio::time::sleep(SAVE_INTERVAL + Duration::from_secs(1)).await;
+        assert_eq!(inode(shared.path()), saved);
+
+        shared.state.lock().unwrap().set_view(VIEW);
+        tokio::time::sleep(SAVE_INTERVAL / 2).await;
+        assert_eq!(inode(shared.path()), saved);
+        tokio::time::sleep(SAVE_INTERVAL / 2).await;
+        assert_eq!(load(shared.path()).unwrap().unwrap().view, VIEW);
     }
 
     #[test]

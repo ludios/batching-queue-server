@@ -535,6 +535,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_server_without_a_dashboard_keeps_the_saved_view_settings() {
+        let (_dir, args) = setup("a\nb\n");
+        let view = r#"{"sort_column": "last_seen", "sort_inverted": true, "show_host": false, "show_ua": true}"#;
+        fs::write(
+            args.state_file(),
+            format!(
+                r#"{{"version": 1, "position": 0, "wraps": 0, "view": {view}, "clients": {{}}}}"#
+            ),
+        )
+        .unwrap();
+        let server = Running::start(&args);
+        assert_eq!(server.get("/").await, (200, "a\n".to_owned()));
+        server.exit().await.unwrap();
+        let loaded = state::load(&args.state_file()).unwrap().unwrap();
+        assert_eq!(
+            loaded.view,
+            state::View {
+                sort_column: state::Column::Last,
+                sort_inverted: true,
+                show_host: false,
+                show_ua: true,
+            }
+        );
+    }
+
+    #[tokio::test]
     async fn a_block_and_the_counters_survive_a_restart() {
         let (_dir, args) = setup("a\nb\n");
         let server = Running::start(&args);

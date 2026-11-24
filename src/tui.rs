@@ -1234,6 +1234,19 @@ mod tests {
             (test.view().sort_column, test.view().sort_inverted),
             (Column::Blocked, false)
         );
+
+        // Also when the saved view has the sort column hidden. (No client has a name, so they
+        // are ordered by IP address.)
+        let view = View {
+            show_host: false,
+            ..view
+        };
+        let mut test = Test::new(10, false, view, &three_clients());
+        let header = &test.draw()[1];
+        assert!(!header.contains('▼') && !header.contains('▲'), "{header}");
+        assert!(!header.contains("HOST"), "{header}");
+        assert_eq!(test.order(), [B, A, C]);
+        assert_eq!(test.view(), view);
     }
 
     #[test]
