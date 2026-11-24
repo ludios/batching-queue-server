@@ -9,10 +9,12 @@ use ratatui::crossterm::event::{
     self, Event as Input, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
 };
+use ratatui::crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste};
+use ratatui::crossterm::style::Print;
 use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode,
 };
-use ratatui::crossterm::{cursor, event::DisableMouseCapture, event::EnableMouseCapture, execute};
+use ratatui::crossterm::{cursor, execute};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::{DefaultTerminal, Terminal, backend::CrosstermBackend};
@@ -679,14 +681,22 @@ impl Dashboard {
         {
             return Some(Action::Quit);
         }
+        // Such as Ctrl-B, which is not `b`
+        let modified_letter = matches!(key.code, KeyCode::Char(_))
+            && key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
         if self.asking_quit {
             if !pressed {
                 return None;
             }
-            if key.code == KeyCode::Char('y') {
+            if key.code == KeyCode::Char('y') && !modified_letter {
                 return Some(Action::Quit);
             }
             return Some(Action::CancelQuit);
+        }
+        if modified_letter {
+            return None;
         }
         // Only the keys that move the selection react to key repeats
         let page = isize::try_from(self.drawn.page.max(1)).unwrap_or(isize::MAX);
@@ -892,16 +902,30 @@ fn read_inputs(inputs: Sender<io::Result<Input>>) {
 /// terminal is gone.
 fn restore_terminal(name: &str) {
     let _ = execute!(stdout(), SetTitle(format!("stopped {name}")));
-    let _ = execute!(stdout(), DisableMouseCapture);
+    let _ = execute!(stdout(), DisableMouseCapture, DisableBracketedPaste);
     // Before leaving the alternate screen, as `ratatui::try_restore` does
     let _ = disable_raw_mode();
     let _ = execute!(stdout(), LeaveAlternateScreen, cursor::Show);
 }
 
-/// Switches the terminal to the dashboard: raw mode, the alternate screen, and mouse capture.
+/// Makes the terminal report the presses and releases of mouse buttons, and the wheel, in SGR
+/// form. Unlike crossterm's `EnableMouseCapture`, this leaves out every movement of the mouse,
+/// which the dashboard ignores. (`DisableMouseCapture` turns this off too.)
+const ENABLE_MOUSE: &str = "\x1b[?1000h\x1b[?1006h";
+
+/// Switches the terminal to the dashboard: raw mode, the alternate screen, mouse reports, and
+/// bracketed paste, which makes pasted text one input that the dashboard ignores, rather than
+/// keys.
+///
+/// Returns the terminal for drawing.
 fn enter_terminal() -> io::Result<DefaultTerminal> {
     enable_raw_mode()?;
-    execute!(stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(
+        stdout(),
+        EnterAlternateScreen,
+        Print(ENABLE_MOUSE),
+        EnableBracketedPaste
+    )?;
     Terminal::new(CrosstermBackend::new(stdout()))
 }
 
@@ -1310,6 +1334,11 @@ mod tests {
         assert!(test.is_blocked(B));
         test.press(KeyCode::Char('b'));
         assert!(!test.is_blocked(B));
+        // Ctrl-B and Alt-B are not `b`
+        for modifiers in [KeyModifiers::CONTROL, KeyModifiers::ALT] {
+            test.input(Input::Key(KeyEvent::new(KeyCode::Char('b'), modifiers)));
+            assert!(!test.is_blocked(B));
+        }
     }
 
     #[test]
@@ -1544,6 +1573,10 @@ mod tests {
         assert!(!test.shared.state.lock().unwrap().is_paused());
         assert!(test.draw()[11].starts_with("F2 UA"));
 
+        assert!(!test.press(KeyCode::F(10)));
+        let ctrl_y = Input::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert!(!test.input(ctrl_y));
+        assert!(test.draw()[11].starts_with("F2 UA"));
         assert!(!test.press(KeyCode::F(10)));
         assert!(test.press(KeyCode::Char('y')));
         assert!(!test.press(KeyCode::Char('n')));
