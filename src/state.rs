@@ -458,9 +458,12 @@ impl State {
     }
 
     /// Changes the view settings of the dashboard to `view`. A change is saved at the next
-    /// periodic save.
+    /// periodic save. After `stop`, does nothing, because the final save may have been taken.
     pub fn set_view(&mut self, view: View) {
         assert_ne!(view.sort_column, Column::Ua, "UA cannot be the sort column");
+        if self.stopped {
+            return;
+        }
         if view != self.view {
             self.view = view;
             self.dirty = true;
@@ -473,8 +476,12 @@ impl State {
     }
 
     /// Blocks or unblocks the client at `ip` (in its canonical form), which must have a client
-    /// record. A change is saved without waiting for the next periodic save.
+    /// record. A change is saved without waiting for the next periodic save. After `stop`, does
+    /// nothing, because the final save may have been taken.
     pub fn set_blocked(&mut self, ip: IpAddr, blocked: bool) {
+        if self.stopped {
+            return;
+        }
         let client = self
             .clients
             .get_mut(&ip)
@@ -853,6 +860,18 @@ mod tests {
                 show_ua: false
             }
         );
+    }
+
+    #[test]
+    fn nothing_that_is_saved_changes_after_stopping() {
+        let (_dir, shared) = setup(3);
+        let mut state = shared.state.lock().unwrap();
+        state.record_request(IP, time("2026-11-24T12:00:00Z"), None);
+        state.stop();
+        state.set_blocked(IP, true);
+        state.set_view(VIEW);
+        assert!(!state.clients[&IP].blocked);
+        assert_eq!(state.view, View::default());
     }
 
     #[test]
