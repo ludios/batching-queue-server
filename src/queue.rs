@@ -102,6 +102,10 @@ impl Queue {
     /// read before (possibly none), and with cycling on (and a position above 0), it starts a
     /// new pass, opening the item file again by its path; the next take then reads the first
     /// line.
+    ///
+    /// After an error, the position is the one from before the take, so that the lines that the
+    /// take read are not counted as handed out. The queue must not be used again, because its
+    /// reader may be past the position.
     pub fn take(&mut self, n: u64) -> Result<Batch> {
         assert!(n >= 1, "n must be at least 1, but is {n}");
         let mut body = Vec::new();
@@ -120,16 +124,17 @@ impl Queue {
                 body.push(b'\n');
             }
             lines += 1;
-            self.position += 1;
         }
 
         let mut wrapped = false;
-        if reached_end {
-            self.total = self.position;
-            if self.cycle && self.position > 0 {
-                (self.reader, self.total) = open_at(&self.path, 0)?;
-                self.position = 0;
-                wrapped = true;
+        if reached_end && self.cycle && self.position + lines > 0 {
+            (self.reader, self.total) = open_at(&self.path, 0)?;
+            self.position = 0;
+            wrapped = true;
+        } else {
+            self.position += lines;
+            if reached_end {
+                self.total = self.position;
             }
         }
         Ok(Batch {
@@ -266,6 +271,18 @@ mod tests {
         assert_eq!(queue.take(5).unwrap(), batch(b"b\n", 1, true));
         assert_eq!(queue.total(), 3);
         assert_eq!(queue.take(3).unwrap(), batch(b"x\ny\nz\n", 3, false));
+    }
+
+    #[test]
+    fn a_failed_take_does_not_count_the_lines_it_read() {
+        let (_dir, path) = item_file(b"a\nb\n");
+        let mut queue = Queue::open(&path, 0, true).unwrap();
+        assert_eq!(queue.take(1).unwrap(), batch(b"a\n", 1, false));
+        // The open file still gives "b", but opening the file again at the wrap fails
+        fs::remove_file(&path).unwrap();
+        let error = format!("{:#}", queue.take(5).err().unwrap());
+        assert!(error.contains("cannot open the item file"), "{error}");
+        assert_eq!(queue.position(), 1);
     }
 
     #[test]
