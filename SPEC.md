@@ -102,6 +102,7 @@ For each request, the first matching row applies:
 | The path is not exactly the `--path` value | `403` | | empty | 1 second | none |
 | The method is not `GET` | `405` | `Allow: GET` | empty | none | none |
 | The `max` query parameter is invalid | `400` | `Content-Type: text/plain` | one line saying what is wrong | none | none |
+| The server is paused | `200` | `Content-Type: text/plain` | empty | 1 second | none |
 | The batch has at least one line | `200` | `Content-Type: text/plain` | each line followed by `\n` | none | the batch |
 | The batch is empty | `200` | `Content-Type: text/plain` | empty | 1 second | none |
 
@@ -113,7 +114,8 @@ For each request, the first matching row applies:
 - `HEAD` on the right path from a client that is not blocked must get `405` and must not consume lines. Verified on docs.rs for axum 0.8.9: a route registered with `routing::get` is also called for `HEAD` requests. Register the handler so that this cannot happen, and test it.
 - The `Content-Type` value is exactly `text/plain`, with no `charset`, as in the Node version.
 - The 1 second delay slows down clients that poll an empty queue and clients that keep hammering while blocked. Waiting requests must not delay other requests.
-- A block or unblock applies to every request whose handler starts after it. Requests already waiting out their delay finish as they started.
+- A block or unblock applies to every request whose handler starts after it. Requests already waiting out their delay finish as they started. The same holds for a pause or resume.
+- The operator can pause the server from the dashboard (see "Keys and mouse"). A paused server answers exactly as if the queue were empty, so clients just idle, and no line is handed out. The pause is not saved: a restart always starts unpaused.
 
 ### Differences from the Node version (all intended)
 
@@ -156,7 +158,7 @@ Keep the most recent 1000 events in memory. One event per request:
 
 - time
 - client IP
-- outcome: the number of lines handed out (possibly 0), or `blocked`, or `wrong path`, or `rejected` together with the status code (`400` or `405`)
+- outcome: the number of lines handed out (possibly 0), or `blocked`, or `wrong path`, or `paused`, or `rejected` together with the status code (`400` or `405`)
 
 ### Rates
 
@@ -247,13 +249,15 @@ items.txt :31417  1,234,567/9,876,543 12.5%  wrap 3  412 items/min  38 req/min  
 11:56:10 2001:db8::17  wrong path
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
-F2 UA  F6 Sort  F7 Invert  F9 Block  F10 Quit
+F2 UA  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
 ```
 
 1. **Status line** (1 row): item file name without its directory; port; position `/` total lines; percent with one decimal, or `-` when the item file has no lines; wrap counter (omit when cycling is off); lines handed out in the last 60 seconds; requests in the last 60 seconds; estimated time until the end of the current pass. The estimate is the remaining lines divided by the 60 second rate, shown in the same form as an age (see "Clients table"), or as `-` when that rate is 0.
 2. **Clients table**: one header row, then one row per client.
 3. **Events pane**: the most recent events, newest at the bottom, as many as fit.
 4. **Key bar** (1 row).
+
+While the server is paused, the status line starts with `PAUSED` in a standout style (for example reverse video), and the key bar shows `F5 Resume` in place of `F5 Pause`.
 
 Let R be the number of rows between the status line and the key bar. The events pane gets R / 3 rows, rounded down; the clients table, including its header row, gets the rest.
 
@@ -290,7 +294,7 @@ A mouse click is resolved against what the most recently drawn frame showed at t
 
 ### Events pane
 
-Each row: local time as `HH:MM:SS`, client IP, outcome. The outcome is the number of lines handed out, or `blocked`, or `wrong path`, or `rejected` followed by the status code.
+Each row: local time as `HH:MM:SS`, client IP, outcome. The outcome is the number of lines handed out, or `blocked`, or `wrong path`, or `paused`, or `rejected` followed by the status code.
 
 ### Keys and mouse
 
@@ -305,6 +309,7 @@ Each row: local time as `HH:MM:SS`, client IP, outcome. The outcome is the numbe
 | `F6` or `s` | Sort by the next sortable column, left to right, wrapping around. |
 | `F7` or `i` | Invert the sort direction. |
 | `F2` or `u` | Show or hide the `UA` column. |
+| `F5` or `p` | Pause the server, or resume it. |
 | `F10` or `q` | Ask "Quit the server? y/n" in the key bar. `y` quits; any other key cancels. |
 | `Ctrl-C` | Quit immediately, also while the quit question is shown. |
 | Left click on a key-bar label | Same as that key. |
@@ -367,6 +372,7 @@ Required, at minimum:
 - With `--path /secret`: `/secret` and `/secret?max=2` are served; `/`, `/secret/`, `/SECRET`, and `/%73ecret` get `403` after 1 second and consume no lines. A `--path` value without a leading `/`, or containing `?`, is an argument error.
 - Each kind of invalid `max` listed above, and lowering to the `--max-batch` value.
 - A blocked IP gets `403` while another IP is served normally; unblocking restores service.
+- While paused: a valid request gets an empty `200` after 1 second and consumes no lines; a blocked IP still gets `403`. After resuming, the next request gets the next line.
 - Many concurrent requests: every line of the file is handed out exactly once.
 - Counters: `items`, `requests`, `first_seen`, `last_seen`, `user_agent` after a mix of outcomes.
 - A `User-Agent` containing a tab, the control character U+009B, and bytes that are not valid UTF-8 is stored without control characters. The HTTP library itself rejects most ASCII control bytes in a header, so also test the cleaning function directly with an escape sequence.
@@ -388,6 +394,7 @@ Required, at minimum:
 - Clicking `[block]` in a row that is not selected only selects that client. Clicking `[block]` in the selected row blocks exactly that IP, also when new data arrived after the frame was drawn and would re-sort the rows.
 - The selection stays on the same IP when the rows re-sort.
 - `F2` shows and hides the `UA` column.
+- `F5` pauses and resumes; while paused, the status line starts with `PAUSED` and the key bar shows `F5 Resume`.
 - Drawing works with an empty item file and with no clients.
 - Property test: drawing never panics for arbitrary terminal sizes from 1×1 to 300×100 and arbitrary client tables.
 
