@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 use serde::de::{Error as _, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::ffi::OsStr;
 use std::fmt;
@@ -551,18 +552,11 @@ struct Saved {
     clients: BTreeMap<IpAddr, Client>,
 }
 
-/// The `version` field of a state file, read before the rest so that a file of another version
-/// is reported as such.
-#[derive(Deserialize)]
-struct Version {
-    version: u64,
-}
-
 /// The contents of a state file, as loaded.
 #[derive(Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Loaded {
-    /// Checked by `load` through `Version`
+    /// Checked by `load`
     #[serde(rename = "version")]
     _version: u64,
     /// The number of lines already handed out in the current pass.
@@ -602,6 +596,26 @@ pub fn lock(path: &Path) -> Result<File> {
     }
 }
 
+/// Checks that `file`, the contents of a state file, is a JSON object, and so are its `view` and
+/// each of its clients, where it has them. (Serde's derived deserializers would also take an
+/// array in place of an object, with the fields in order.)
+///
+/// Returns the reason why it is not valid, if one of them is not an object.
+fn check_objects(file: &Value) -> Result<(), &'static str> {
+    let Some(fields) = file.as_object() else {
+        return Err("it must be a JSON object");
+    };
+    if fields.get("view").is_some_and(|view| !view.is_object()) {
+        return Err("its view must be a JSON object");
+    }
+    if let Some(Value::Object(clients)) = fields.get("clients")
+        && clients.values().any(|client| !client.is_object())
+    {
+        return Err("each of its clients must be a JSON object");
+    }
+    Ok(())
+}
+
 /// Loads the state file at `path`.
 ///
 /// Returns None if there is no file at `path`.
@@ -615,12 +629,18 @@ pub fn load(path: &Path) -> Result<Option<Loaded>> {
         }
     };
     let invalid = || format!("the state file {} is not valid", path.display());
-    let version: Version = serde_json::from_slice(&contents).with_context(invalid)?;
-    if version.version != VERSION {
+    let file: Value = serde_json::from_slice(&contents).with_context(invalid)?;
+    check_objects(&file)
+        .map_err(anyhow::Error::msg)
+        .with_context(invalid)?;
+    // Before the rest, so that a file of another version is reported as such
+    if let Some(version) = file.get("version").and_then(Value::as_u64)
+        && version != VERSION
+    {
         bail!(
-            "the state file {} has version {}, but this server reads only version {VERSION}",
-            path.display(),
-            version.version
+            "the state file {} has version {version}, but this server reads only version \
+             {VERSION}",
+            path.display()
         );
     }
     let loaded: Loaded = serde_json::from_slice(&contents).with_context(invalid)?;
@@ -1072,7 +1092,8 @@ mod tests {
         for (contents, error) in [
             ("", "EOF while parsing"),
             (&valid[..20], "EOF while parsing"),
-            ("1234\n", "invalid type: integer `1234`"),
+            ("1234\n", "it must be a JSON object"),
+            (r#"[1, 0, 0, {}]"#, "it must be a JSON object"),
             (&valid.replace("1,", "2,"), "has version 2"),
             (
                 &valid.replace(r#""wraps": 0, "#, ""),
@@ -1162,7 +1183,18 @@ mod tests {
             ),
             (
                 &valid.replace("{}", r#"{}, "view": null"#),
-                "invalid type: null, expected struct View",
+                "its view must be a JSON object",
+            ),
+            (
+                &valid.replace("{}", r#"{}, "view": ["ip", false, true, false]"#),
+                "its view must be a JSON object",
+            ),
+            (
+                &valid.replace(
+                    "{}",
+                    r#"{"1.2.3.4": [false, 1, 1, "2026-11-24T12:00:00Z", "2026-11-24T12:00:00Z", null]}"#,
+                ),
+                "each of its clients must be a JSON object",
             ),
             (
                 &with_view("ip", ", \"show_ua\": true, \"x\": 1"),
