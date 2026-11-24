@@ -601,22 +601,31 @@ pub fn lock(path: &Path) -> Result<File> {
     }
 }
 
-/// Checks that `file`, the contents of a state file, is a JSON object, and so are its `view` and
-/// each of its clients, where it has them. (Serde's derived deserializers would also take an
-/// array in place of an object, with the fields in order.)
+/// Checks the parts of `file`, the contents of a state file, that serde's derived deserializers
+/// would also take in a shape that the state file's format doesn't have: an object (`file`
+/// itself, its `view`, or one of its clients) written as an array of its fields in order, and
+/// the `sort_column` of its `view` written as an object `{"items": null}` instead of a string.
 ///
-/// Returns the reason why it is not valid, if one of them is not an object.
-fn check_objects(file: &Value) -> Result<(), &'static str> {
+/// Returns the reason why `file` is not valid, if one of these parts has the wrong shape.
+fn check_shape(file: &Value) -> Result<(), String> {
     let Some(fields) = file.as_object() else {
-        return Err("it must be a JSON object");
+        return Err("it must be a JSON object".to_owned());
     };
-    if fields.get("view").is_some_and(|view| !view.is_object()) {
-        return Err("its view must be a JSON object");
+    if let Some(view) = fields.get("view") {
+        let Some(view) = view.as_object() else {
+            return Err("its view must be a JSON object".to_owned());
+        };
+        if view
+            .get("sort_column")
+            .is_some_and(|column| !column.is_string())
+        {
+            return Err("the sort_column of its view must be a JSON string".to_owned());
+        }
     }
     if let Some(Value::Object(clients)) = fields.get("clients")
-        && clients.values().any(|client| !client.is_object())
+        && let Some((ip, _)) = clients.iter().find(|(_, client)| !client.is_object())
     {
-        return Err("each of its clients must be a JSON object");
+        return Err(format!("its client {ip:?} must be a JSON object"));
     }
     Ok(())
 }
@@ -634,19 +643,22 @@ pub fn load(path: &Path) -> Result<Option<Loaded>> {
         }
     };
     let invalid = || format!("the state file {} is not valid", path.display());
-    let file: Value = serde_json::from_slice(&contents).with_context(invalid)?;
-    check_objects(&file)
-        .map_err(anyhow::Error::msg)
-        .with_context(invalid)?;
-    // Before the rest, so that a file of another version is reported as such
-    if let Some(version) = file.get("version").and_then(Value::as_u64)
-        && version != VERSION
+    // In a block, so that it is dropped before the parse below needs memory of its own
     {
-        bail!(
-            "the state file {} has version {version}, but this server reads only version \
-             {VERSION}",
-            path.display()
-        );
+        let file: Value = serde_json::from_slice(&contents).with_context(invalid)?;
+        // Before the rest, so that a file of another version is reported as such
+        if let Some(version) = file.get("version").and_then(Value::as_u64)
+            && version != VERSION
+        {
+            bail!(
+                "the state file {} has version {version}, but this server reads only version \
+                 {VERSION}",
+                path.display()
+            );
+        }
+        check_shape(&file)
+            .map_err(anyhow::Error::msg)
+            .with_context(invalid)?;
     }
     let loaded: Loaded = serde_json::from_slice(&contents).with_context(invalid)?;
     Ok(Some(loaded))
@@ -1098,7 +1110,22 @@ mod tests {
             ("", "EOF while parsing"),
             (&valid[..20], "EOF while parsing"),
             ("1234\n", "it must be a JSON object"),
-            (r#"[1, 0, 0, {}]"#, "it must be a JSON object"),
+            (
+                r#"[1, 0, 0, {"sort_column": "ip", "sort_inverted": false, "show_host": true, "show_ua": false}, {}]"#,
+                "it must be a JSON object",
+            ),
+            (
+                &valid.replace("1,", r#"2, "view": [1, 2, 3, 4],"#),
+                "has version 2",
+            ),
+            (
+                &valid.replace(
+                    "{}",
+                    r#"{}, "view": {"sort_column": {"ip": null}, "sort_inverted": false,
+                        "show_host": true, "show_ua": false}"#,
+                ),
+                "the sort_column of its view must be a JSON string",
+            ),
             (&valid.replace("1,", "2,"), "has version 2"),
             (
                 &valid.replace(r#""wraps": 0, "#, ""),
@@ -1199,7 +1226,7 @@ mod tests {
                     "{}",
                     r#"{"1.2.3.4": [false, 1, 1, "2026-11-24T12:00:00Z", "2026-11-24T12:00:00Z", null]}"#,
                 ),
-                "each of its clients must be a JSON object",
+                "its client \"1.2.3.4\" must be a JSON object",
             ),
             (
                 &with_view("ip", ", \"show_ua\": true, \"x\": 1"),
