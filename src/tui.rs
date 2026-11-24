@@ -564,15 +564,14 @@ impl Dashboard {
         let header_style = Style::new().fg(Color::Black).bg(Color::Green);
         buf.set_style(Rect::new(area.x, area.y, area.width, 1), header_style);
         for placed in &columns {
-            let mut style = header_style;
             let mut arrow = "";
             if placed.column == view.sort_column {
-                style = style.bg(Color::Cyan);
+                let sort_style = header_style.bg(Color::Cyan);
+                buf.set_style(Rect::new(placed.x, area.y, placed.width, 1), sort_style);
                 arrow = if is_descending(view) { "▼" } else { "▲" };
             }
-            buf.set_style(Rect::new(placed.x, area.y, placed.width, 1), style);
             let text = format!("{}{arrow}", header(placed.column));
-            placed.draw(buf, area.y, &text, style);
+            placed.draw(buf, area.y, &text, Style::new());
         }
         self.drawn.header_y = Some(area.y);
 
