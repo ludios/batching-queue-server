@@ -4,6 +4,7 @@
 mod http;
 mod queue;
 mod state;
+mod tui;
 
 use anyhow::{Context, Result, anyhow, bail};
 use clap::Parser;
@@ -11,14 +12,15 @@ use queue::Queue;
 use socket2::{Domain, Protocol, Socket, Type};
 use state::{Shared, State};
 use std::fs::{self, File};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::net::{Ipv6Addr, SocketAddr};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::signal::unix::{SignalKind, signal};
-use tokio::sync::mpsc::{self, UnboundedReceiver};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 /// Checks a `--path` value: it must start with `/`, contain only `/` and the characters that
 /// clients send unchanged, and have no segment that is `.` or `..`.
@@ -110,6 +112,8 @@ struct Server {
     router: axum::Router,
     /// Receives the errors that must stop the server.
     fatal: UnboundedReceiver<anyhow::Error>,
+    /// Sends to `fatal`.
+    fatal_sender: UnboundedSender<anyhow::Error>,
     /// The open lock file, which keeps the lock of the state file until the server is dropped.
     _lock: File,
 }
@@ -159,12 +163,13 @@ fn start(args: &Args) -> Result<Server> {
         path: args.path.clone(),
         max_batch: args.max_batch,
     };
-    let router = http::router(shared.clone(), config, fatal_sender);
+    let router = http::router(shared.clone(), config, fatal_sender.clone());
     Ok(Server {
         shared,
         listener,
         router,
         fatal,
+        fatal_sender,
         _lock: lock,
     })
 }
@@ -179,6 +184,7 @@ async fn serve(server: Server, exit: impl Future<Output = ()>) -> Result<()> {
         listener,
         router,
         mut fatal,
+        fatal_sender: _,
         _lock,
     } = server;
     let service = router.into_make_service_with_connect_info::<SocketAddr>();
@@ -226,23 +232,61 @@ fn exit_signal() -> Result<impl Future<Output = ()>> {
     })
 }
 
+/// Switches the terminal to the dashboard of `server`, which was started with `args`.
+///
+/// `quit` receives a message when the operator chooses to quit.
+fn start_dashboard(
+    args: &Args,
+    server: &Server,
+    quit: UnboundedSender<()>,
+) -> Result<tui::Running> {
+    let item_file = &args.item_file;
+    let name = item_file.file_name().unwrap_or(item_file.as_os_str());
+    let config = tui::Config {
+        name: state::clean_for_terminal(name.as_bytes(), usize::MAX),
+        port: server.listener.local_addr()?.port(),
+        cycle: args.cycle,
+    };
+    let fatal = server.fatal_sender.clone();
+    tui::start(server.shared.clone(), config, quit, fatal).context("cannot start the dashboard")
+}
+
 fn main() {
     let args = Args::parse();
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_target(false)
-        // Otherwise a failed write to stderr is reported with `eprintln!`, which panics when
-        // stderr is gone
-        .log_internal_errors(false)
-        .init();
+    let show_dashboard = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    // With the dashboard, nothing else may write to the terminal
+    if !show_dashboard {
+        tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_target(false)
+            // Otherwise a failed write to stderr is reported with `eprintln!`, which panics
+            // when stderr is gone
+            .log_internal_errors(false)
+            .init();
+    }
     let runtime = tokio::runtime::Runtime::new().expect("the tokio runtime starts");
+    let mut dashboard = None;
     let result = runtime.block_on(async {
         let server = start(&args)?;
         // Only now, so that until then (during a long scan of the item file, for example) these
         // signals end the process at once, which loses nothing
-        let exit = exit_signal().context("cannot listen for signals")?;
+        let signal = exit_signal().context("cannot listen for signals")?;
+        let (quit_sender, mut quit) = mpsc::unbounded_channel();
+        if show_dashboard {
+            dashboard = Some(start_dashboard(&args, &server, quit_sender)?);
+        }
+        let exit = async move {
+            tokio::select! {
+                () = signal => {}
+                Some(()) = quit.recv() => {}
+            }
+        };
         serve(server, exit).await
     });
+    // After the final save, so that a terminal that is gone cannot prevent it
+    if let Some(dashboard) = dashboard {
+        dashboard.finish();
+    }
     if let Err(error) = result {
         print_line(&format!("{error:#}"));
         std::process::exit(1);

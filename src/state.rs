@@ -405,11 +405,7 @@ impl State {
             clients: self.clients.clone(),
         }
     }
-}
 
-/// What the dashboard, which is still to come, will use.
-#[cfg_attr(not(test), expect(dead_code, reason = "the dashboard will call these"))]
-impl State {
     pub fn queue(&self) -> &Queue {
         &self.queue
     }
