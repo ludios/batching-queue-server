@@ -19,12 +19,12 @@ batching-queue-server [OPTIONS] ITEM_FILE
 | Option | Default | Meaning |
 |---|---|---|
 | `--state-file FILE` | the `ITEM_FILE` path with `.bqs.json` appended | Where the state file is (see "The state file"). For `/data/items.txt` the default is `/data/items.txt.bqs.json`. |
-| `--port PORT` | `31417` | The TCP port to listen on, for both IPv4 and IPv6. |
-| `--cycle` | off | After the last line of the file is handed out, continue with its first line again. Without `--cycle`, the server hands out no more lines after the last one. |
-| `--max-batch N` | `10000` | The most lines in one response. |
+| `--port PORT` | `31417` | The TCP port to listen on. The server listens on the IPv6 wildcard address `[::]` for both IPv4 and IPv6, so the system must support IPv6. |
+| `--cycle` | off | After the last line of the file is handed out, continue with its first line again. Without `--cycle`, the server doesn't hand out any more lines after the last one. |
+| `--max-batch N` | `10000` | The most lines in one response. Must be at least 1. |
 | `--path PATH` | `/` | The only request path at which lines are handed out; every other path gets `403`. It must start with `/` and consist of `/`, `A`-`Z`, `a`-`z`, `0`-`9`, `-`, `_`, `.`, and `~`, without a segment that is `.` or `..`. |
 
-Every setting is a command-line option; no setting is taken from an environment variable.
+Every setting is a command-line option; the server doesn't take any setting from an environment variable.
 
 For example:
 
@@ -34,7 +34,7 @@ batching-queue-server --cycle --path /k3v9x2m7q4w8 /data/items.txt
 
 A client then gets up to 100 lines with `curl 'http://SERVER:31417/k3v9x2m7q4w8?max=100'`.
 
-A long random `--path` value keeps out strangers, who do not know it. It does not keep out other users of the same machine: a command line, and so the `--path` value, is visible to them in the process list (`ps`).
+A long random `--path` value keeps out strangers, who do not know it. It does not keep out other users of the same machine: a command line, and so the `--path` value, is visible to them in the process list (`ps`). Nor does it keep out anyone who can watch the network traffic, because requests are plain HTTP.
 
 At startup, the server prints one line to stderr that names the state file and says the position it starts at. Then, if stdin and stdout are terminals and the server runs in the foreground, it shows the dashboard (see "The dashboard"). Without the dashboard, and also with it if stderr is not a terminal (for example, redirected to a file), the server writes one line to stderr for each request.
 
@@ -44,8 +44,8 @@ Two servers that serve the same item file need different state files, so give at
 
 - A line is a sequence of bytes ended by `\n`. A last line without a final `\n` is also a line. Empty lines are lines too, and a `\r` before the `\n` is part of the line.
 - Each line is sent exactly as it is in the file, whatever its bytes, followed by `\n`.
-- Do not change the item file in place while the server runs. To replace it, rename a new file over it: the server opens the path again at each wrap, so with `--cycle` the new file is served from the next pass on. (A server whose item file has no lines never wraps; restart it.)
-- At startup and at each wrap, the server reads the whole file once to count its lines. For a very large file, this takes seconds, during which no request is served.
+- Do not change the item file in place while the server runs. To replace it, rename a new file over it: the server opens the path again at each wrap, so with `--cycle` the new file is served from the next pass on. (A server whose item file doesn't have any lines never wraps; restart it.)
+- At startup and at each wrap, the server reads the whole file once to count its lines. For a very large file, this takes seconds, during which the server doesn't serve any request.
 
 ## HTTP contract
 
@@ -66,6 +66,7 @@ For each request, the first row that applies decides the reply:
 - The path is compared with `--path` byte for byte, as received: no URL-decoding, no case folding, and `/secret/` is not `/secret`.
 - A wrong path gets exactly the reply that a blocked client gets, so that a stranger cannot tell the two apart.
 - The client's IP address is the address of the TCP connection, with an IPv4-mapped IPv6 address (`::ffff:203.0.113.7`) taken as the IPv4 address. Headers such as `X-Forwarded-For` are not read.
+- With `--cycle`, the request that reaches the end of the file gets the lines that were left, possibly none (then as an empty `200` after 1 second), and the next request gets the first line. So with `--cycle`, an empty reply doesn't mean that the queue is done.
 - The server counts a line as handed out when it reads the line for a response, not when the client has received it. A client that disconnects early loses its lines; with `--cycle`, they are handed out again in the next pass.
 
 ## The state file
@@ -98,10 +99,10 @@ The state file holds everything that survives a restart: the position, the wrap 
 
 - `position` is the number of lines already handed out in the current pass over the item file, which is also the 0-based index of the next line to hand out.
 - `wraps` counts how many times the server has started again at the first line.
-- `clients` has one record for each IP address that has ever made a request, whatever the reply was. `items` is the number of lines handed to that IP address, and `user_agent` is the `User-Agent` of its most recent request that had one (with each control character replaced by `?`, and cut to 200 characters), or `null`.
+- `clients` has one record for each IP address that has ever made a request, whatever the reply was. `items` is the number of lines handed to that IP address, and `user_agent` is the `User-Agent` of its most recent request that had one (with each invalid UTF-8 sequence replaced by U+FFFD, each control character replaced by `?`, and cut to 200 characters), or `null`.
 - `view` holds the dashboard's sort column (one of `blocked`, `ip`, `items`, `first_seen`, `last_seen`, `requests`, `host`), whether the sort direction is inverted, and whether the `HOST` and `UA` columns are shown. It may be left out, and then the values shown above apply.
 
-If the state file does not exist, the server starts at position 0 and creates it. A state file that cannot be read, or that is not exactly in this form, is a startup error: the server never silently starts again at line 0 or forgets its block list.
+If the state file does not exist, the server starts at position 0 and creates it. So check the path if a restarted server reports that it created the state file: a mistyped `--state-file`, or an item file that was moved or renamed (which moves the default state file path), makes the server start again at line 0 without its block list. A state file that exists but cannot be read, or that is not exactly in this form, is a startup error, and so is a `position` greater than the number of lines in the item file.
 
 The server saves the state file at startup, every 30 seconds while anything in it has changed, at once after a block, an unblock, or a wrap, and at every clean exit (see "Exiting"). It saves by writing a new file and renaming it over the old one, so the state file is always complete. After a crash, a `kill -9`, or a power loss, the server starts again from the last save, which is normally at most about 30 seconds old: the lines handed out after that save are handed out a second time. No line is skipped.
 
@@ -119,7 +120,7 @@ Next to the state file is its lock file, whose path is the state file's path wit
 
 Limits:
 
-- The lock file's path is the state file's path as given, with `.lock` appended. A second path to the same state file, for example a symlink to it, gets a different lock file, so two servers that use the two paths are not detected.
+- The lock file's path is the state file's path as given, with `.lock` appended. So a symlink or a hard link to the state file under another name gets a different lock file, and two servers that use the two names are not detected.
 - The lock is reliable only on a local filesystem.
 
 ## The dashboard
@@ -137,7 +138,7 @@ F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
 
 From top to bottom:
 
-1. The status line: the item file name, the port, the position and the number of lines in the file, the percent done, the estimated time until the end of the pass at the rate of the last minute (or `DONE` when cycling is off and every line has been handed out, as also for an empty item file), the lines handed out and the requests in the last minute, the wrap counter (with `--cycle` only), and the number of client IP addresses and how many of them are blocked. While the server is paused, the line starts with `PAUSED`.
+1. The status line: the item file name, the port, the position and the number of lines in the file, the percent done, the estimated time until the end of the pass at the rate of the last minute (or `DONE` when cycling is off and every line has been handed out; so with cycling off, an item file without lines shows `DONE` at once), the lines handed out and the requests in the last minute, the wrap counter (with `--cycle` only), and the number of client IP addresses and how many of them are blocked. While the server is paused, the line starts with `PAUSED`.
 2. The clients table, one row per client IP address. `FIRST` and `LAST` are the times since the first and the most recent request. `HOST` is the reverse DNS name (see "Reverse DNS names"). `UA` is the most recent `User-Agent`; this column is hidden unless the operator has chosen to show it. Rows of blocked IP addresses are drawn in red.
 3. The events pane: the most recent requests, newest at the bottom, each with its time, its client, and its outcome (the number of lines handed out, `blocked`, `wrong path`, `paused`, or `rejected` with the status code).
 4. The key bar.
@@ -156,8 +157,8 @@ The terminal window's title shows the state too: `12.5% items.txt`, `PAUSED 12.5
 | `F7` or `i` | Invert the sort direction. |
 | `F2` or `u` | Show or hide the `UA` column. |
 | `F3` or `h` | Show or hide the `HOST` column. |
-| `F5` or `p` | Pause handing out lines, or resume. A paused server answers as if it had no lines left, so clients just wait. |
-| `F10` or `q` | Ask whether to quit: `y` quits, any other key cancels. |
+| `F5` or `p` | Pause handing out lines, or resume. A paused server answers as if it didn't have any lines left, so clients just wait. |
+| `F10` or `q` | Ask whether to quit: `y` quits, `Ctrl-C` quits too, and any other key cancels. |
 | `Ctrl-C` | Quit at once. |
 | Left click on a key-bar label | Same as that key. |
 
@@ -170,29 +171,31 @@ Quitting the dashboard stops the server. The sort column, the sort direction, an
 The `HOST` column shows the reverse DNS name (the `PTR` record) of each client IP address, as a hint about who the client is.
 
 - Each client is looked up at most once per run of the server, at its first request in that run, in the background. At most 8 lookups run at the same time, and further ones wait their turn. A lookup is given up 5 seconds after it started running; its wait for a turn does not count.
-- An empty `HOST` cell means that the client's lookup has not started or not finished yet in this run; `-` means that the lookup found no name, failed, or was given up.
+- Lookups run also while the `HOST` column is hidden.
+- An empty `HOST` cell means that the client's lookup has not started or not finished yet in this run; `-` means that the lookup didn't find a name, failed, or was given up.
 - The names are not verified. Nothing checks that a name resolves back to the IP address, so the owner of an address can publish any name for it.
 - The lookups send the client IP addresses to the DNS resolver that the system is configured with (`/etc/resolv.conf`).
-- Names are shown in ASCII form: an internationalized label as `xn--…`, a printable character other than a letter, a digit, `-`, and `_` as `\` followed by that character (for example `\[`), and every other byte as `\` followed by its three octal digits (for example `\033` for ESC).
-- Without a dashboard, the server does no lookups.
+- Names are shown in ASCII form: an internationalized label as `xn--…`, and an unusual character escaped in the style of a DNS zone file, as `\` followed by the character (for example `\[`) or by its byte in three octal digits (for example `\033` for ESC).
+- Without a dashboard, the server doesn't do any lookups.
 
 ## Exiting
 
 These are clean exits: `q` followed by `y`, `Ctrl-C` in the dashboard, and the signals `SIGINT`, `SIGTERM`, and `SIGHUP` (sent when the terminal window is closed). At a clean exit, the server stops handing out lines, saves the state file, restores the terminal, and exits with status 0, or with status 1 if the save failed. Before the server has started (for example, during a long scan of the item file), these signals end it at once, which loses nothing.
 
-If saving the state file or reading the item file fails while the server runs, the server stops handing out lines, saves the state file if it still can, prints the error to stderr, and exits with status 1.
+If saving the state file or reading the item file fails while the server runs, the server stops handing out lines, saves the state file (unless saving is what failed), prints the error to stderr, and exits with status 1.
 
 ## Moving from the Node version
 
 - Replace the environment variable `PORT` with `--port`.
 - Add `--cycle` unless the old launch set `CYCLE=false`, because cycling is now off by default. Remove `CYCLE`.
 - Remove the second positional argument, the position file.
-- To continue a queue that is in progress, stop the Node version, and create the state file from the number in the old position file:
+- The server writes its state file next to the item file, and beside the state file its lock file and, at each save, a temporary file. So it needs write access to the item file's directory, unless `--state-file` puts the state file elsewhere.
+- To continue a queue that is in progress, stop the Node version, and create the state file from the number in the old position file (write it to the `--state-file` path instead, if you give one):
 
   ```
   echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json
   ```
 
-  The old position file stays untouched, so going back to the Node version remains possible. To go back without handing out lines a second time, stop the Rust server and write the `position` of its state file into the old position file.
+  The old position file stays untouched, so going back to the Node version remains possible. The Node version is in this repository's history: commit 24e616cf1c82 is the last one that has it. To go back without handing out lines a second time, stop the Rust server and write the `position` of its state file into the old position file.
 
 Replies that differ from the Node version's: an invalid `max` (for example `0`, `1.5`, `-1`, `1e3`, or an empty value) gets `400`; `max` is limited to `--max-batch`; only the `--path` value hands out lines, and every other path gets `403`; a method other than `GET` gets `405` instead of no reply; and lines that are not valid UTF-8 are sent unchanged instead of with U+FFFD in place of each invalid sequence.
