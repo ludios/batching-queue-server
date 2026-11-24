@@ -241,7 +241,7 @@ If both stdin and stdout are terminals, the server draws the dashboard. Otherwis
 From top to bottom. The numbers are examples.
 
 ```
-items.txt :31417  1,234,567/9,876,543 12.5%  wrap 3  412 items/min  38 req/min  ETA 14d
+items.txt :31417  1,234,567/9,876,543 12.5%  ETA 14d  412 items/min  38 req/min  wrap 3  3 IPs, 1 blocked
            IP             ITEMS▼  FIRST  LAST    REQS
 [block]    203.0.113.7    12,400     3d    2s     124
 [unblock]  198.51.100.9      300     1h    0s   1,215
@@ -252,7 +252,16 @@ items.txt :31417  1,234,567/9,876,543 12.5%  wrap 3  412 items/min  38 req/min  
 F2 UA  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
 ```
 
-1. **Status line** (1 row): item file name without its directory; port; position `/` total lines; percent with one decimal, or `-` when the item file has no lines; wrap counter (omit when cycling is off); lines handed out in the last 60 seconds; requests in the last 60 seconds; estimated time until the end of the current pass. The estimate is the remaining lines divided by the 60 second rate, shown in the same form as an age (see "Clients table"), or as `-` when that rate is 0.
+1. **Status line** (1 row). Its parts come in this order, most important first, because a narrow window cuts off the right end:
+   - item file name without its directory
+   - port
+   - position `/` total lines
+   - percent with one decimal, or `-` when the item file has no lines
+   - `ETA` and the estimated time until the end of the current pass: the remaining lines divided by the 60 second rate, shown in the same form as an age (see "Clients table"), or as `-` when that rate is 0. When cycling is off and the position is at the end of the file, show `DONE` in place of `ETA` and the estimate.
+   - lines handed out in the last 60 seconds
+   - requests in the last 60 seconds
+   - wrap counter (omit when cycling is off)
+   - number of known client IPs, and how many of them are blocked
 2. **Clients table**: one header row, then one row per client.
 3. **Events pane**: the most recent events, newest at the bottom, as many as fit.
 4. **Key bar** (1 row).
@@ -291,6 +300,20 @@ Columns, left to right:
 **A mouse click never blocks a client that was not already selected.** Rows re-sort several times per second, faster than a hand moves, so the row under the pointer can change just before a click lands. Therefore a click on any part of a client row selects that client, and only a click on `[block]` or `[unblock]` in the row of the client that is already selected blocks or unblocks it. The operator has then seen the highlight on that client before the second click.
 
 A mouse click is resolved against what the most recently drawn frame showed at the clicked cell: record, while drawing, which IP each screen row holds and where each column and key-bar label is, and resolve clicks against that record. Do not recompute the layout from the current state when a click arrives. Use one description of the column geometry for both drawing and click resolution.
+
+### Terminal title
+
+While the dashboard runs, set the title of the terminal window, so that a list of windows shows the state of every instance. The title is the first of these that applies:
+
+| Situation | Title |
+|---|---|
+| Cycling is off and the position is at the end of the file | `DONE items.txt` |
+| The server is paused | `PAUSED 12.5% items.txt` |
+| Otherwise | `12.5% items.txt` |
+
+The percent is the one from the status line. Write the title only when its text changes. At every exit that restores the terminal (a clean exit, or a failure while running), set the title to `stopped items.txt`.
+
+The item file name comes from the command line and is written to the terminal, in the title and in the status line. Clean it first in the same way as a `User-Agent` value.
 
 ### Events pane
 
@@ -395,6 +418,8 @@ Required, at minimum:
 - The selection stays on the same IP when the rows re-sort.
 - `F2` shows and hides the `UA` column.
 - `F5` pauses and resumes; while paused, the status line starts with `PAUSED` and the key bar shows `F5 Resume`.
+- The status line shows the number of client IPs and of blocked ones, and shows `DONE` when cycling is off and the position is at the end of the file.
+- The title text for each row of the "Terminal title" table, and for an item file without lines.
 - Drawing works with an empty item file and with no clients.
 - Property test: drawing never panics for arbitrary terminal sizes from 1×1 to 300×100 and arbitrary client tables.
 
