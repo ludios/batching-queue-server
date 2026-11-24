@@ -255,29 +255,25 @@ impl State {
         Ok(batch)
     }
 
-    /// Returns the contents of a state file that holds the current state, and counts the state
-    /// as saved.
-    fn snapshot(&mut self) -> Vec<u8> {
+    /// Returns a copy of what the state file holds, and counts the state as saved.
+    fn snapshot(&mut self) -> Saved {
         self.dirty = false;
-        let saved = Saved {
+        Saved {
             version: VERSION,
             position: self.queue.position(),
             wraps: self.wraps,
-            clients: &self.clients,
-        };
-        let mut contents = serde_json::to_vec_pretty(&saved).expect("the state serializes");
-        contents.push(b'\n');
-        contents
+            clients: self.clients.clone(),
+        }
     }
 }
 
 /// The contents of a state file, as saved.
 #[derive(Serialize)]
-struct Saved<'a> {
+struct Saved {
     version: u64,
     position: u64,
     wraps: u64,
-    clients: &'a BTreeMap<IpAddr, Client>,
+    clients: BTreeMap<IpAddr, Client>,
 }
 
 /// The `version` field of a state file, read before the rest so that a file of another version
@@ -413,11 +409,13 @@ impl Shared {
     }
 
     /// Saves a snapshot of the state to the state file. Blocks until it is on disk, but holds
-    /// the state lock only while taking the snapshot.
+    /// the state mutex only while copying the state, which is much faster than serializing it.
     pub fn save(&self) -> Result<()> {
         let _saving = self.save_lock.lock().unwrap();
         let snapshot = self.state.lock().unwrap().snapshot();
-        write_atomically(&self.path, &snapshot)
+        let mut contents = serde_json::to_vec_pretty(&snapshot).expect("the state serializes");
+        contents.push(b'\n');
+        write_atomically(&self.path, &contents)
     }
 }
 
