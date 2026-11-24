@@ -243,8 +243,10 @@ fn main() {
         .init();
     let runtime = tokio::runtime::Runtime::new().expect("the tokio runtime starts");
     let result = runtime.block_on(async {
-        let exit = exit_signal().context("cannot listen for signals")?;
         let server = start(&args)?;
+        // Only now, so that until then (during a long scan of the item file, for example) these
+        // signals end the process at once, which loses nothing
+        let exit = exit_signal().context("cannot listen for signals")?;
         serve(server, exit).await
     });
     if let Err(error) = result {
