@@ -27,18 +27,21 @@ The operator will read and maintain this code. Prefer the plainest design that m
 ## Command line
 
 ```
-batching-queue-server ITEM_FILE STATE_FILE
+batching-queue-server [OPTIONS] ITEM_FILE
 ```
 
-| Environment variable | Default | Meaning |
-|---|---|---|
-| `PORT` | `31417` | TCP port to listen on. |
-| `CYCLE` | `true` | `true` or `false`. Whether to start again at the first line after the last line was handed out. Any other value is a startup error. |
-| `MAX_BATCH` | `10000` | Upper limit on the number of lines in one response. Must be at least 1. |
+| Option | Environment variable | Default | Meaning |
+|---|---|---|---|
+| `--state-file FILE` | (none) | the `ITEM_FILE` path with `.bqs.json` appended | Where the state file is. For `/data/items.txt` the default is `/data/items.txt.bqs.json`, in the same directory as the item file. |
+| `--port PORT` | `PORT` | `31417` | TCP port to listen on. |
+| `--cycle BOOL` | `CYCLE` | `true` | `true` or `false`. Whether to start again at the first line after the last line was handed out. Any other value is a startup error. |
+| `--max-batch N` | `MAX_BATCH` | `10000` | Upper limit on the number of lines in one response. Must be at least 1. |
+
+An option given on the command line wins over its environment variable. Use `clap` (derive, with its `env` feature), which provides both forms from one declaration.
 
 Listen on `[::]:PORT`, accepting IPv4 and IPv6, as the Node version does.
 
-Existing launch scripts pass two positional arguments and the `PORT` and `CYCLE` variables. Keep them working unchanged: the second argument used to be the Node version's position file, and a file in that old format is accepted as a state file (see "State file"). Use `clap` (derive, with its `env` feature).
+`ITEM_FILE` is the only positional argument. The Node version took a second positional argument, the position file; a second positional argument is now a startup error, so that an old launch script cannot run with its position silently ignored. To continue a queue that the Node version had started, pass the old position file as `--state-file` (see "State file").
 
 Every startup error (bad arguments, unreadable item file, invalid state file, port in use) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
 
@@ -143,7 +146,7 @@ Pass the current time into the functions that need it instead of reading the clo
 
 ## State file
 
-One file, at the path given as `STATE_FILE`, holds everything that survives a restart: the position, the wrap counter, and the clients.
+One file holds everything that survives a restart: the position, the wrap counter, and the clients. Its path is the value of `--state-file`, or by default the `ITEM_FILE` path with `.bqs.json` appended.
 
 ```json
 {
@@ -166,14 +169,15 @@ One file, at the path given as `STATE_FILE`, holds everything that survives a re
 ### Loading at startup
 
 - The file does not exist: position 0, wrap counter 0, no clients.
-- The file, after trimming ASCII whitespace, consists only of ASCII decimal digits: it is a position file written by the Node version. Use the number as the position, with wrap counter 0 and no clients. The first save replaces the file with the JSON format.
+- The file, after trimming ASCII whitespace, consists only of ASCII decimal digits: it is a position file written by the Node version. Use the number as the position, with wrap counter 0 and no clients.
 - The file is JSON with `"version": 1`: use it.
 - Anything else (an empty file, damaged JSON, another `version`, a number too large for `u64`): exit with an error. Never silently restart at line 0 and never silently discard a block list.
 
 ### Saving
 
 - Save by writing a temporary file in the same directory and renaming it over the state file. Do not call `fsync`.
-- Save once per second if anything changed since the last save, immediately when a block or unblock happens, and at a clean exit.
+- Save once at startup, after loading and before listening. This makes a location that cannot be written a startup error, and it replaces a Node position file with the JSON format.
+- After that, save once per second if anything changed since the last save, immediately when a block or unblock happens, and at a clean exit.
 - Every save is one consistent snapshot: the position, the wrap counter, and the counters are all from the same instant.
 - Two saves must never interleave, and an older snapshot must never overwrite a newer one.
 - Events and rates are not saved.
@@ -323,6 +327,7 @@ Required, at minimum:
 
 - Save and load round trip, including the position and the wrap counter. Missing file: position 0 and no clients. A file holding only digits: that position and no clients. An empty file, damaged JSON, or a wrong version: startup error.
 - Through the whole server: hand out some lines, exit cleanly, start again with the same state file, and the next request continues with the next line.
+- Without `--state-file`, the state file is the item file path with `.bqs.json` appended. A state file location that cannot be written is a startup error. A second positional argument is a startup error.
 
 **Dashboard** (with ratatui's `TestBackend`)
 
@@ -334,13 +339,13 @@ Required, at minimum:
 
 **One-time checks, not kept in the repository**
 
-- Before deleting the Node version: run both versions against the same item file with the same sequence of valid requests and confirm byte-identical bodies, and that the position in the state file after a clean exit equals the number in the Node version's position file, including across a wrap. Also start the Rust version on a position file left by the Node version and confirm that it continues with the next line.
+- Before deleting the Node version: run both versions against the same item file with the same sequence of valid requests and confirm byte-identical bodies, and that the position in the state file after a clean exit equals the number in the Node version's position file, including across a wrap. Also start the Rust version with `--state-file` pointing at a position file left by the Node version and confirm that it continues with the next line.
 - Run the real binary in a detached `tmux` session, drive it with `tmux send-keys`, send requests with `curl`, and read the screen with `tmux capture-pane -p`. Confirm that the dashboard looks like the layout above, that keys work, and that the terminal is restored after quitting, after `SIGTERM`, and after a forced panic.
 
 ## Deliverables
 
 1. The Rust crate at the repository root, building without warnings and passing `cargo clippy` and `cargo test`.
-2. `README.md`: what the server does, how to run it, the HTTP contract, the files it writes, the dashboard keys. The repository has no README today.
+2. `README.md`: what the server does, how to run it, the HTTP contract, the files it writes, the dashboard keys. The repository has no README today. Include how to move from the Node version: remove the second positional argument, and pass the old position file as `--state-file` to continue a queue that is in progress.
 3. Removal of `index.js`, `readlines.js`, and `package.json`. Keep `LICENSE`.
 4. `.gitignore` with `target/`.
 
