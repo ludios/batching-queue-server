@@ -286,7 +286,7 @@ fn shorten_host(name: &str, width: u16) -> String {
     if length <= width {
         return name.to_owned();
     }
-    let end: String = name.chars().skip(length - width.saturating_sub(1)).collect();
+    let end: String = name.chars().skip(length + 1 - width).collect();
     format!("…{end}")
 }
 
