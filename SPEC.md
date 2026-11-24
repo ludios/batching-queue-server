@@ -23,6 +23,7 @@ The operator will read and maintain this code. Prefer the plainest design that m
 - No rate limiting. No automatic blocking. No client nicknames. No block list shared between instances.
 - The dashboard is a TUI inside the server process. No web UI.
 - The User-Agent column is hidden by default and can be toggled.
+- The clients table has a column with the reverse DNS name of each IP.
 - Sorting works like `htop`: click a column header, or use function keys.
 - Every setting is a command-line option. No environment variable is read.
 
@@ -152,6 +153,20 @@ A client record is created by the first request of any kind from that IP, so tha
 
 The `User-Agent` value comes from the network and is drawn on the operator's terminal. Before storing it: decode it as UTF-8 with replacement of invalid sequences, replace every control character (Unicode category Cc, which includes U+0080 to U+009F) with `?`, and truncate it to 200 `char`s. If a request has several `User-Agent` headers, use the first. No terminal escape sequence from a client may ever reach the terminal.
 
+### Reverse DNS names
+
+The dashboard shows the reverse DNS name (the PTR record) of each client IP, as a hint about who the client is.
+
+- Look up each client once per run of the server: when its record is created, or at startup for a record loaded from the state file. Never repeat a lookup, also not after a failure.
+- Lookups run in the background. No request ever waits for one.
+- At most 8 lookups run at the same time; further ones wait their turn. A lookup that has not finished after 5 seconds is given up.
+- Use the resolver configuration of the system (`/etc/resolv.conf`).
+- The result is the first name in the answer, without its final `.`. The owner of the address controls this name, and it is drawn on the operator's terminal, so clean it in the same way as a `User-Agent` value, and truncate it to 100 `char`s.
+- So a client is in one of three states: not looked up yet; looked up, with a name; looked up, without a name (no PTR record, an error, or given up).
+- Names are kept in memory only. They are not saved in the state file.
+- Without a dashboard, do no lookups.
+- The name is not verified: nothing checks that the name resolves back to the IP, so the owner of an address can publish any name. The README must say this.
+
 ### Events
 
 Keep the most recent 1000 events in memory. One event per request:
@@ -211,7 +226,7 @@ There is no automatic conversion of a Node position file. The README explains ho
 - After that, save every 5 seconds if anything in the saved data changed since the last save, immediately when a block or unblock happens, and at every clean exit (see "Exiting").
 - Every save is one consistent snapshot: the position, the wrap counter, and every client record are from the same instant. Take the snapshot while holding the state lock; write it to disk after releasing that lock, so that a slow disk does not stall requests.
 - Two saves must never interleave, and an older snapshot must never overwrite a newer one.
-- Events and rates are not saved.
+- Events, rates, and reverse DNS names are not saved.
 
 The state is deliberately not saved on every request, because each save rewrites every client record. The consequence: after a crash, a kill, or a power loss, the server restarts from the last saved snapshot, which is normally at most about 5 seconds old, and the lines handed out after that snapshot are handed out a second time. This is accepted. No line is skipped because of it. A clean exit loses nothing.
 
@@ -242,14 +257,14 @@ From top to bottom. The numbers are examples.
 
 ```
 items.txt :31417  1,234,567/9,876,543 12.5%  ETA 14d  412 items/min  38 req/min  wrap 3  3 IPs, 1 blocked
-           IP             ITEMS▼  FIRST  LAST    REQS
-[block]    203.0.113.7    12,400     3d    2s     124
-[unblock]  198.51.100.9      300     1h    0s   1,215
-[block]    2001:db8::17        0     5m    5m       1
+           IP             ITEMS▼  FIRST  LAST    REQS  HOST
+[block]    203.0.113.7    12,400     3d    2s     124  crawler-7.example.net
+[unblock]  198.51.100.9      300     1h    0s   1,215  -
+[block]    2001:db8::17        0     5m    5m       1  scanner.example.org
 11:56:10 2001:db8::17  wrong path
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
-F2 UA  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
+F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
 ```
 
 1. **Status line** (1 row). Its parts come in this order, most important first, because a narrow window cuts off the right end:
@@ -284,13 +299,16 @@ Columns, left to right:
 | `FIRST` | age of `first_seen` | time | most recent first |
 | `LAST` | age of `last_seen` | time | most recent first |
 | `REQS` | `requests` | number | largest first |
+| `HOST` | the reverse DNS name; `-` when the lookup found none; empty while the client has not been looked up yet | the name with its labels in reverse order (`host.example.com` sorts as `com.example.host`), ignoring case, so that clients of one domain are adjacent; clients without a name come after all names | ascending |
 | `UA` | `user_agent`, or `-` | not sortable | |
 
+- The `HOST` column is shown at startup and can be hidden. Its width is that of the longest name in it, but at most 40 columns; longer names are truncated.
 - The `UA` column is hidden at startup. When shown, it takes the remaining width and is truncated.
+- A hidden column cannot become the sort column. If the sort column gets hidden, the order stays as it is.
 - Ages show only their largest unit: `42s`, `17m`, `5h` (below 48 hours), `12d`.
 - Column widths adapt to their content. Columns that do not fit in the window are cut off on the right.
 - Rows of blocked IPs are drawn in a clearly different style (for example red), so that the block state is visible without reading the first column.
-- The initial sort is `ITEMS`, largest first. The header of the sort column carries `▼` when the largest value is first (for the time columns: the most recent; for the first column: blocked) and `▲` for the opposite order. So `IP` ascending carries `▲`.
+- The initial sort is `ITEMS`, largest first. The header of the sort column carries `▼` when the largest value is first (for the time columns: the most recent; for the first column: blocked) and `▲` for the opposite order. So `IP` ascending and `HOST` ascending carry `▲`.
 - Making a column the sort column, by click or by key, always starts with its "direction when first chosen", also when it has been the sort column before.
 - Rows that compare equal are ordered by IP address ascending, so that rows never jitter.
 - One row is selected and highlighted, and the table scrolls to keep it visible. With no clients, nothing is selected. When nothing is selected and a client exists, the first row becomes selected.
@@ -329,9 +347,10 @@ Each row: local time as `HH:MM:SS`, client IP, outcome. The outcome is the numbe
 | Left click on `[block]` or `[unblock]` in the row of the selected client | Block or unblock that client. |
 | `F9` or `b` | Block or unblock the selected client. |
 | Left click on a column header | Sort by that column. If it is already the sort column, invert the direction. A click on the `UA` header does nothing. |
-| `F6` or `s` | Sort by the next sortable column, left to right, wrapping around. |
+| `F6` or `s` | Sort by the next sortable column that is shown, left to right, wrapping around. |
 | `F7` or `i` | Invert the sort direction. |
 | `F2` or `u` | Show or hide the `UA` column. |
+| `F3` or `h` | Show or hide the `HOST` column. |
 | `F5` or `p` | Pause the server, or resume it. |
 | `F10` or `q` | Ask "Quit the server? y/n" in the key bar. `y` quits; any other key cancels. |
 | `Ctrl-C` | Quit immediately, also while the quit question is shown. |
@@ -346,6 +365,8 @@ Redraw after every input event, and at least 4 times per second. Wait for input 
 ## Implementation guidance
 
 The operator's other Rust projects use edition 2024, `anyhow`, `clap`, `tokio`, `axum`, `serde`, `jiff`, and `tracing`; use the same here. Versions current on 2026-11-24: `ratatui` 0.30, `crossterm` 0.29, `axum` 0.8, `tokio` 1, `jiff` 1 (its `serde` feature is needed for the timestamps in the state file). `ratatui` 0.30 is split into several crates and its API has changed between releases, so read the docs.rs pages for the exact versions you pin instead of relying on memory. Take `crossterm` through the version that `ratatui` uses, so that there is only one copy.
+
+For reverse DNS, use `hickory-resolver` (0.26 is current). Verified on docs.rs for 0.26.4: `Resolver::builder_tokio()` builds a resolver from the system configuration, and `Resolver::reverse_lookup` exists; check their exact signatures there. Make the lookup function replaceable, so that tests supply their own and never send a DNS query.
 
 Verified on docs.rs: `ratatui::init()` enables raw mode and the alternate screen and installs a panic hook that restores the terminal. It does not enable mouse capture; enable that yourself and disable it on every exit path, including panics. `axum::extract::ConnectInfo` works only when the server is started with connection info, for example through `Router::into_make_service_with_connect_info`.
 
@@ -401,6 +422,14 @@ Required, at minimum:
 - A `User-Agent` containing a tab, the control character U+009B, and bytes that are not valid UTF-8 is stored without control characters. The HTTP library itself rejects most ASCII control bytes in a header, so also test the cleaning function directly with an escape sequence.
 - One test through a real TCP listener on `127.0.0.1` with port 0: a `GET` is served and attributed to `127.0.0.1`, and a `HEAD` gets `405`. This proves the wiring of the peer address, which the other tests bypass.
 
+**Reverse DNS** (with a lookup function supplied by the test, and tokio's paused time)
+
+- Many requests from one IP cause one lookup. A client loaded from the state file is looked up at startup.
+- A request is answered while the lookup for its client has not finished.
+- With more than 8 new clients at once, at most 8 lookups run at the same time, and all of them finish eventually.
+- A lookup that never answers is given up after 5 seconds, and the client then counts as looked up without a name.
+- A name with a final `.`, with control characters, or longer than 100 `char`s is stored without the `.`, cleaned, and truncated.
+
 **State file** (every test uses an item file in its own fresh temporary directory, because the default state file is written next to the item file)
 
 - Save and load round trip, including the position and the wrap counter. Missing file: position 0 and no clients.
@@ -416,7 +445,8 @@ Required, at minimum:
 - Clicking a header sorts by that column; clicking it again inverts; `F6`, `F7` do the same by keyboard.
 - Clicking `[block]` in a row that is not selected only selects that client. Clicking `[block]` in the selected row blocks exactly that IP, also when new data arrived after the frame was drawn and would re-sort the rows.
 - The selection stays on the same IP when the rows re-sort.
-- `F2` shows and hides the `UA` column.
+- `F2` shows and hides the `UA` column; `F3` shows and hides the `HOST` column.
+- Sorting by `HOST` puts `b.example.com` next to `a.example.com` and before `a.example.net`, and puts clients without a name last. The `HOST` cell is `-` for a client looked up without a name and empty for a client not looked up yet.
 - `F5` pauses and resumes; while paused, the status line starts with `PAUSED` and the key bar shows `F5 Resume`.
 - The status line shows the number of client IPs and of blocked ones, and shows `DONE` when cycling is off and the position is at the end of the file.
 - The title text for each row of the "Terminal title" table, and for an item file without lines.
@@ -431,7 +461,7 @@ Required, at minimum:
 ## Deliverables
 
 1. The Rust crate at the repository root, with its `Cargo.lock` committed, building without warnings and passing `cargo clippy` and `cargo test`.
-2. `README.md`: what the server does, how to run it, the HTTP contract, the state file, the dashboard keys. The repository has no README today. Include a section "Moving from the Node version": replace the environment variables `PORT` and `CYCLE=false` with `--port` and `--no-cycle`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
+2. `README.md`: what the server does, how to run it, the HTTP contract, the state file, the dashboard keys, and that reverse DNS names are not verified. The repository has no README today. Include a section "Moving from the Node version": replace the environment variables `PORT` and `CYCLE=false` with `--port` and `--no-cycle`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
 3. Removal of `index.js`, `readlines.js`, `package.json`, and `LICENSE`. That `LICENSE` file is the license of the vendored `readlines.js` only. Do not add a license for the Rust crate; the operator has not chosen one.
 4. `.gitignore` with `target/`.
 
@@ -453,4 +483,5 @@ Do not build these; mention them in your final report if you see a strong reason
 - Removing old client records.
 - Appending to the item file while the server runs.
 - Detecting two servers that use the same state file.
-- Remembering the sort column or the `UA` toggle across restarts.
+- Remembering the sort column or the `UA` and `HOST` toggles across restarts.
+- Verifying a reverse DNS name with a forward lookup, and saving names across restarts.
