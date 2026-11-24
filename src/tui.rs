@@ -292,10 +292,9 @@ fn shorten_host(name: &str) -> String {
     format!("…{end}")
 }
 
-/// Returns the label in the first column of a client that is blocked as `blocked` says: what a
-/// click on it does.
+/// Returns the label in the first column for a client that is blocked as `blocked` says.
 fn block_label(blocked: bool) -> &'static str {
-    if blocked { "[unblock]" } else { "[block]" }
+    if blocked { "blocked" } else { "allowed" }
 }
 
 /// Returns the text of the cell of `column` in the row of `row`, at `now`.
@@ -356,7 +355,8 @@ fn place_columns(view: &View, rows: &[Row], now: Timestamp, x: u16, width: u16) 
             // columns to its right
             let header_width = header(column).len() + usize::from(is_sortable(column));
             let cells_width = if column == Column::Blocked {
-                // As wide as it gets, so that the first block does not shift the table
+                // As wide as a label, also without rows, so that the first client does not
+                // shift the table
                 block_label(true).len()
             } else {
                 rows.iter()
@@ -1178,10 +1178,10 @@ mod tests {
             test.draw(),
             [
                 "items.txt :31417  0/10 0.0%  ETA 0s  1,000 items/min  2 req/min  wrap 0  3 IPs, 1 blocked",
-                "           IP            ITEMS▼   FIRST   LAST   REQS  HOST",
-                "[block]    203.0.113.7   12,400      3d     2s    124",
-                "[unblock]  198.51.100.9     300      3d     2s  1,215",
-                "[block]    2001:db8::17       0      3d     2s      1",
+                "         IP            ITEMS▼   FIRST   LAST   REQS  HOST",
+                "allowed  203.0.113.7   12,400      3d     2s    124",
+                "blocked  198.51.100.9     300      3d     2s  1,215",
+                "allowed  2001:db8::17       0      3d     2s      1",
                 "",
                 "",
                 "",
@@ -1315,9 +1315,9 @@ mod tests {
         assert!(!test.is_blocked(A) && !test.is_blocked(C));
         assert_eq!(test.order(), [B, A, C]);
 
-        // `[unblock]` is wider than `[block]`
+        // A click on the last character of `blocked` unblocks
         let (_, b_y) = find(&test.draw(), "198.51.100.9");
-        test.click(8, b_y);
+        test.click(6, b_y);
         assert!(!test.is_blocked(B));
         test.press(KeyCode::F(9));
         assert!(test.is_blocked(B));

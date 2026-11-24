@@ -127,10 +127,10 @@ Limits:
 
 ```
 items.txt :31417  1,234,567/9,876,536 12.5%  ETA 14d  412 items/min  38 req/min  wrap 3  3 IPs, 1 blocked
-           IP             ITEMS▼  FIRST  LAST    REQS  HOST
-[block]    203.0.113.7    12,400     3d    2s     124  crawler-7.example.net
-[unblock]  198.51.100.9      300     1h    0s   1,215  -
-[block]    2001:db8::17        0     5m    5m       1  scanner.example.org
+         IP             ITEMS▼  FIRST  LAST    REQS  HOST
+allowed  203.0.113.7    12,400     3d    2s     124  crawler-7.example.net
+blocked  198.51.100.9      300     1h    0s   1,215  -
+allowed  2001:db8::17        0     5m    5m       1  scanner.example.org
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
 F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
@@ -150,7 +150,7 @@ The terminal window's title shows the state too: `12.5% items.txt`, `PAUSED 12.5
 | `Up`, `Down`, `PageUp`, `PageDown`, `Home`, `End` | Move the selection. |
 | Mouse wheel over the clients table | Move the selection by 3 rows. |
 | Left click on a client row | Select that client. |
-| Left click on `[block]` or `[unblock]` in the selected row | Block or unblock that client. |
+| Left click on `allowed` or `blocked` in the selected row | Block or unblock that client. |
 | `F9` or `b` | Block or unblock the selected client. |
 | Left click on a column header | Sort by that column. A click on the header of the sort column inverts the direction. A click on `UA` does nothing. |
 | `F6` or `s` | Sort by the next shown column to the right, wrapping around. (`UA` is not sortable.) |
@@ -162,7 +162,7 @@ The terminal window's title shows the state too: `12.5% items.txt`, `PAUSED 12.5
 | `Ctrl-C` | Quit at once. |
 | Left click on a key-bar label | Same as that key. |
 
-A click on `[block]` in a row that is not selected only selects that client. Rows re-sort several times per second, so this keeps a click from blocking a client that moved under the pointer: the operator always sees the highlight on a client before blocking it with a click.
+A click on `allowed` in a row that is not selected only selects that client. Rows re-sort several times per second, so this keeps a click from blocking a client that moved under the pointer: the operator always sees the highlight on a client before blocking it with a click.
 
 Quitting the dashboard stops the server. The sort column, the sort direction, and which of `HOST` and `UA` are shown are kept in the state file.
 

@@ -293,10 +293,10 @@ From top to bottom. The numbers are examples, from a server started with `--cycl
 
 ```
 items.txt :31417  1,234,567/9,876,543 12.5%  ETA 14d  412 items/min  38 req/min  wrap 3  3 IPs, 1 blocked
-           IP             ITEMS▼  FIRST  LAST    REQS  HOST
-[block]    203.0.113.7    12,400     3d    2s     124  crawler-7.example.net
-[unblock]  198.51.100.9      300     1h    0s   1,215  -
-[block]    2001:db8::17        0     5m    5m       1  scanner.example.org
+         IP             ITEMS▼  FIRST  LAST    REQS  HOST
+allowed  203.0.113.7    12,400     3d    2s     124  crawler-7.example.net
+blocked  198.51.100.9      300     1h    0s   1,215  -
+allowed  2001:db8::17        0     5m    5m       1  scanner.example.org
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
 F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
@@ -328,7 +328,7 @@ Columns, left to right:
 
 | Header | Content | Sorts by | Direction when first chosen |
 |---|---|---|---|
-| (blank) | `[block]` for an unblocked IP, `[unblock]` for a blocked IP | blocked or not | blocked first |
+| (blank) | `allowed` for an unblocked IP, `blocked` for a blocked IP | blocked or not | blocked first |
 | `IP` | the address | address, numerically (IPv4 before IPv6), not as a string | ascending |
 | `ITEMS` | `items` | number | largest first |
 | `FIRST` | age of `first_seen` | time | most recent first |
@@ -350,7 +350,7 @@ Columns, left to right:
 
 **The selection is an IP address, not a row number.** When the rows re-sort, the same IP stays selected. Blocking always acts on the selected IP.
 
-**A mouse click never blocks a client that was not already selected.** Rows re-sort several times per second, faster than a hand moves, so the row under the pointer can change just before a click lands. Therefore a click on any part of a client row selects that client, and only a click on `[block]` or `[unblock]` in the row of the client that is already selected blocks or unblocks it. The operator has then seen the highlight on that client before the second click.
+**A mouse click never blocks a client that was not already selected.** Rows re-sort several times per second, faster than a hand moves, so the row under the pointer can change just before a click lands. Therefore a click on any part of a client row selects that client, and only a click on `allowed` or `blocked` in the row of the client that is already selected blocks or unblocks it. The operator has then seen the highlight on that client before the second click.
 
 A mouse click is resolved against what the most recently drawn frame showed at the clicked cell: record, while drawing, which IP each screen row holds and where each column and key-bar label is, and resolve clicks against that record. Do not recompute the layout from the current state when a click arrives. Use one description of the column geometry for both drawing and click resolution.
 
@@ -379,7 +379,7 @@ Each row: local time as `HH:MM:SS`, client IP, outcome. The outcome is the numbe
 | `Up`, `Down`, `PageUp`, `PageDown`, `Home`, `End` | Move the selection. |
 | Mouse wheel over the clients table | Move the selection by 3 rows. |
 | Left click on a client row | Select that client. |
-| Left click on `[block]` or `[unblock]` in the row of the selected client | Block or unblock that client. |
+| Left click on `allowed` or `blocked` in the row of the selected client | Block or unblock that client. |
 | `F9` or `b` | Block or unblock the selected client. |
 | Left click on a column header | Sort by that column. If it is already the sort column, invert the direction. A click on the `UA` header does nothing. |
 | `F6` or `s` | Sort by the next sortable column that is shown, left to right, wrapping around. |
@@ -484,7 +484,7 @@ Required, at minimum:
 **Dashboard** (with ratatui's `TestBackend`)
 
 - Clicking a header sorts by that column; clicking it again inverts; `F6`, `F7` do the same by keyboard.
-- Clicking `[block]` in a row that is not selected only selects that client. Clicking `[block]` in the selected row blocks exactly that IP, also when new data arrived after the frame was drawn and would re-sort the rows.
+- Clicking `allowed` in a row that is not selected only selects that client. Clicking `allowed` in the selected row blocks exactly that IP, also when new data arrived after the frame was drawn and would re-sort the rows.
 - The selection stays on the same IP when the rows re-sort.
 - A dashboard started from saved view settings shows that sort column, that direction, and those columns, with the rows in that order, also when the saved sort column is hidden; changing them changes what the next save writes.
 - `F2` shows and hides the `UA` column; `F3` shows and hides the `HOST` column.
