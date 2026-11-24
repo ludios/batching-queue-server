@@ -1,6 +1,6 @@
 //! The HTTP interface: one handler, which hands out lines at one path.
 
-use crate::state::{self, Shared, State as ServerState};
+use crate::state::{self, Outcome, Shared, State as ServerState};
 use anyhow::Result;
 use axum::Router;
 use axum::extract::{ConnectInfo, Request, State};
@@ -9,7 +9,6 @@ use axum::http::request::Parts;
 use axum::http::{HeaderValue, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use jiff::Timestamp;
-use std::fmt;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,23 +47,18 @@ enum Reply {
     Lines(Vec<u8>, u64),
 }
 
-impl fmt::Display for Reply {
-    /// Writes the outcome of the request, as logged.
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+impl Reply {
+    fn outcome(&self) -> Outcome {
         match self {
-            Reply::Blocked => write!(f, "blocked"),
-            Reply::WrongPath => write!(f, "wrong path"),
-            Reply::MethodNotAllowed => {
-                write!(f, "rejected {}", StatusCode::METHOD_NOT_ALLOWED.as_u16())
-            }
-            Reply::BadMax(_) => write!(f, "rejected {}", StatusCode::BAD_REQUEST.as_u16()),
-            Reply::Paused => write!(f, "paused"),
-            Reply::Lines(_, lines) => write!(f, "{lines}"),
+            Reply::Blocked => Outcome::Blocked,
+            Reply::WrongPath => Outcome::WrongPath,
+            Reply::MethodNotAllowed => Outcome::Rejected(StatusCode::METHOD_NOT_ALLOWED.as_u16()),
+            Reply::BadMax(_) => Outcome::Rejected(StatusCode::BAD_REQUEST.as_u16()),
+            Reply::Paused => Outcome::Paused,
+            Reply::Lines(_, lines) => Outcome::Lines(*lines),
         }
     }
-}
 
-impl Reply {
     /// Waits out the delay of this reply, if it has one, and returns its response.
     async fn respond(self) -> Response {
         let text_plain = [(CONTENT_TYPE, "text/plain")];
@@ -181,7 +175,12 @@ async fn handle(
     let (request, _) = request.into_parts();
     let decided = {
         let mut state = app.shared.state.lock().unwrap();
-        decide(&mut state, &app.config, ip, state::now(), &request)
+        let now = state::now();
+        let decided = decide(&mut state, &app.config, ip, now, &request);
+        if let Ok(Some(reply)) = &decided {
+            state.record_outcome(ip, now, reply.outcome());
+        }
+        decided
     };
     drop(request);
     let reply = match decided {
@@ -193,7 +192,7 @@ async fn handle(
             return std::future::pending().await;
         }
     };
-    tracing::info!("{ip} {reply}");
+    tracing::info!("{ip} {}", reply.outcome());
     reply.respond().await
 }
 
@@ -602,6 +601,50 @@ mod tests {
             .await;
         assert_eq!(server.client(ip).requests, 7);
         assert_eq!(server.shared.state.lock().unwrap().clients().len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn each_request_is_an_event() {
+        let server = server("a\nb\nc\n", "/", 10000, false);
+        server.get("/?max=2").await;
+        server.request(OTHER_IP, Method::GET, "/wrong").await;
+        server.request(OTHER_IP, Method::HEAD, "/").await;
+        server.get("/?max=x").await;
+        server.set_paused(true);
+        server.get("/").await;
+        server.set_paused(false);
+        server.set_blocked(OTHER_IP, true);
+        server.request(OTHER_IP, Method::GET, "/").await;
+        server.get("/?max=5").await;
+        server.get("/").await;
+
+        let state = server.shared.state.lock().unwrap();
+        let events: Vec<(String, Outcome)> = state
+            .events()
+            .iter()
+            .map(|event| (event.ip.to_string(), event.outcome))
+            .collect();
+        let event = |ip: &str, outcome| (ip.to_owned(), outcome);
+        assert_eq!(
+            events,
+            [
+                event("203.0.113.7", Outcome::Lines(2)),
+                event(OTHER_IP, Outcome::WrongPath),
+                event(OTHER_IP, Outcome::Rejected(405)),
+                event("203.0.113.7", Outcome::Rejected(400)),
+                event("203.0.113.7", Outcome::Paused),
+                event(OTHER_IP, Outcome::Blocked),
+                event("203.0.113.7", Outcome::Lines(1)),
+                event("203.0.113.7", Outcome::Lines(0)),
+            ]
+        );
+        assert_eq!(
+            state.last_minute(state::now()),
+            state::Counts {
+                requests: 8,
+                lines: 3
+            }
+        );
     }
 
     #[tokio::test(start_paused = true)]

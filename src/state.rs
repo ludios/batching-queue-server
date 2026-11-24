@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 use serde::de::{Error as _, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -26,6 +26,12 @@ const VERSION: u64 = 1;
 
 /// The most `char`s of a `User-Agent` value that are kept.
 const MAX_USER_AGENT_CHARS: usize = 200;
+
+/// The most events that are kept.
+const MAX_EVENTS: usize = 1000;
+
+/// The number of seconds over which requests and lines handed out are counted.
+const RATE_SECONDS: usize = 60;
 
 /// Returns the current time, in whole seconds, as the state file holds it.
 pub fn now() -> Timestamp {
@@ -111,6 +117,89 @@ fn deserialize_clients<'de, D: Deserializer<'de>>(
     deserializer.deserialize_map(ClientsVisitor)
 }
 
+/// What came of one request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// This many lines were handed out (possibly 0).
+    Lines(u64),
+    Blocked,
+    WrongPath,
+    Paused,
+    /// Rejected with this HTTP status code.
+    Rejected(u16),
+}
+
+impl fmt::Display for Outcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Outcome::Lines(lines) => write!(f, "{lines}"),
+            Outcome::Blocked => f.write_str("blocked"),
+            Outcome::WrongPath => f.write_str("wrong path"),
+            Outcome::Paused => f.write_str("paused"),
+            Outcome::Rejected(status) => write!(f, "rejected {status}"),
+        }
+    }
+}
+
+/// One request, as the dashboard lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Event {
+    pub time: Timestamp,
+    /// The IP address of the client, in its canonical form.
+    pub ip: IpAddr,
+    pub outcome: Outcome,
+}
+
+/// Numbers of requests and of lines handed out.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Counts {
+    pub requests: u64,
+    pub lines: u64,
+}
+
+/// The counts of the last `RATE_SECONDS` seconds, one per second.
+struct Rates {
+    /// The counts of each second, at the index of that second modulo `RATE_SECONDS`, with the
+    /// second (since the Unix epoch) they belong to.
+    seconds: [(i64, Counts); RATE_SECONDS],
+}
+
+impl Rates {
+    fn new() -> Rates {
+        Rates {
+            seconds: [(i64::MIN, Counts::default()); RATE_SECONDS],
+        }
+    }
+
+    /// Counts a request at `now` that handed out `lines` lines.
+    fn add(&mut self, now: Timestamp, lines: u64) {
+        let second = now.as_second();
+        let index = usize::try_from(second.rem_euclid(RATE_SECONDS as i64))
+            .expect("a remainder of a positive divisor is not negative");
+        let (counted_second, counts) = &mut self.seconds[index];
+        if *counted_second != second {
+            *counted_second = second;
+            *counts = Counts::default();
+        }
+        counts.requests = counts.requests.saturating_add(1);
+        counts.lines = counts.lines.saturating_add(lines);
+    }
+
+    /// Returns the counts of the `RATE_SECONDS` seconds that end with the second of `now`.
+    fn sum(&self, now: Timestamp) -> Counts {
+        let last = now.as_second();
+        let first = last - (RATE_SECONDS as i64 - 1);
+        let mut sum = Counts::default();
+        for (second, counts) in &self.seconds {
+            if (first..=last).contains(second) {
+                sum.requests = sum.requests.saturating_add(counts.requests);
+                sum.lines = sum.lines.saturating_add(counts.lines);
+            }
+        }
+        sum
+    }
+}
+
 /// Returns `path` with `suffix` appended to its last component, so that `items.txt` with
 /// `.bqs.json` becomes `items.txt.bqs.json`.
 pub fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
@@ -138,6 +227,9 @@ pub struct State {
     /// The client records, keyed by canonical IP address: those from the state file, and one
     /// for each IP address that has made a request since.
     clients: BTreeMap<IpAddr, Client>,
+    /// The most recent requests, at most `MAX_EVENTS`, oldest first.
+    events: VecDeque<Event>,
+    rates: Rates,
     /// Whether the operator has paused handing out lines.
     paused: bool,
     /// Whether the server has stopped handing out lines because it is exiting.
@@ -160,6 +252,8 @@ impl State {
             queue,
             wraps,
             clients,
+            events: VecDeque::with_capacity(MAX_EVENTS),
+            rates: Rates::new(),
             paused: false,
             stopped: false,
             dirty: false,
@@ -236,6 +330,25 @@ impl State {
         Ok(batch)
     }
 
+    /// Records what came of a request from `ip` (in its canonical form) at `now`, in the events
+    /// and in the rates.
+    pub fn record_outcome(&mut self, ip: IpAddr, now: Timestamp, outcome: Outcome) {
+        if self.events.len() == MAX_EVENTS {
+            self.events.pop_front();
+        }
+        self.events.push_back(Event {
+            time: now,
+            ip,
+            outcome,
+        });
+        let lines = if let Outcome::Lines(lines) = outcome {
+            lines
+        } else {
+            0
+        };
+        self.rates.add(now, lines);
+    }
+
     /// Returns a copy of what the state file holds, and counts the state as saved.
     fn snapshot(&mut self) -> Saved {
         self.dirty = false;
@@ -261,6 +374,17 @@ impl State {
 
     pub fn clients(&self) -> &BTreeMap<IpAddr, Client> {
         &self.clients
+    }
+
+    /// Returns the most recent requests, oldest first.
+    pub fn events(&self) -> &VecDeque<Event> {
+        &self.events
+    }
+
+    /// Returns the requests and the lines handed out in the last minute before `now`, give or
+    /// take a second.
+    pub fn last_minute(&self, now: Timestamp) -> Counts {
+        self.rates.sum(now)
     }
 
     /// Pauses handing out lines, or resumes it. A pause is not saved.
@@ -541,6 +665,50 @@ mod tests {
             client.user_agent.as_ref().unwrap().chars().count(),
             MAX_USER_AGENT_CHARS
         );
+    }
+
+    #[test]
+    fn outcomes_as_shown() {
+        let shown = [
+            Outcome::Lines(100),
+            Outcome::Blocked,
+            Outcome::WrongPath,
+            Outcome::Paused,
+            Outcome::Rejected(405),
+        ]
+        .map(|outcome| outcome.to_string());
+        assert_eq!(
+            shown,
+            ["100", "blocked", "wrong path", "paused", "rejected 405"]
+        );
+    }
+
+    #[test]
+    fn events_and_rates() {
+        let (_dir, shared) = setup(3);
+        let mut state = shared.state.lock().unwrap();
+        let at = |second: i64| Timestamp::from_second(1_795_000_000 + second).unwrap();
+        // 10 requests in each of 150 seconds, every other one with 2 lines
+        for i in 0..1500 {
+            let outcome = if i % 2 == 0 {
+                Outcome::Lines(2)
+            } else {
+                Outcome::Blocked
+            };
+            state.record_outcome(IP, at(i / 10), outcome);
+        }
+        assert_eq!(state.events().len(), MAX_EVENTS);
+        assert_eq!(state.events()[0].time, at(50));
+        assert_eq!(state.events()[MAX_EVENTS - 1].time, at(149));
+
+        let counts = |requests, lines| Counts { requests, lines };
+        assert_eq!(state.last_minute(at(149)), counts(600, 600));
+        assert_eq!(state.last_minute(at(200)), counts(90, 90));
+        assert_eq!(state.last_minute(at(300)), counts(0, 0));
+        // The clock jumped back: only seconds 90 to 100 are still counted
+        assert_eq!(state.last_minute(at(100)), counts(110, 110));
+        state.record_outcome(IP, at(-10), Outcome::Lines(5));
+        assert_eq!(state.last_minute(at(-10)), counts(1, 5));
     }
 
     #[test]
