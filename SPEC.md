@@ -292,7 +292,7 @@ If both stdin and stdout are terminals, and the server is in the foreground proc
 From top to bottom. The numbers are examples, from a server started with `--cycle`.
 
 ```
-items.txt :31417  1,234,567/9,876,543 12.5%  ETA 14d  412 items/min  38 req/min  wrap 3  3 IPs, 1 blocked
+items.txt :31417  1,234,567/9,876,536 12.5%  ETA 14d  412 items/min  38 req/min  wrap 3  3 IPs, 1 blocked
          IP            ITEMS▼   FIRST   LAST   REQS  HOST
 allowed  203.0.113.7   12,400      3d     2s    124  crawler-7.example.net
 blocked  198.51.100.9     300      1h     0s  1,215  -
