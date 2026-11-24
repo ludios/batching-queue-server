@@ -91,7 +91,8 @@ The state file holds everything that survives a restart: the position, the wrap 
       "requests": 124,
       "first_seen": "2026-11-24T12:01:02Z",
       "last_seen": "2026-11-24T18:40:11Z",
-      "user_agent": "curl/8.9.1"
+      "user_agent": "curl/8.9.1",
+      "host": "crawler-7.example.net"
     }
   }
 }
@@ -99,16 +100,16 @@ The state file holds everything that survives a restart: the position, the wrap 
 
 - `position` is the number of lines already handed out in the current pass over the item file, which is also the 0-based index of the next line to hand out.
 - `wraps` counts how many times the server has started again at the first line.
-- `clients` has one record for each IP address that has ever made a request, whatever the reply was. `items` is the number of lines handed to that IP address, and `user_agent` is the `User-Agent` of its most recent request that had one (with each invalid UTF-8 sequence replaced by U+FFFD, each control character replaced by `?`, and cut to 200 characters), or `null`.
+- `clients` has one record for each IP address that has ever made a request, whatever the reply was. `items` is the number of lines handed to that IP address, and `user_agent` is the `User-Agent` of its most recent request that had one (with each invalid UTF-8 sequence replaced by U+FFFD, each control character replaced by `?`, and cut to 200 characters), or `null`. `host` is the reverse DNS name that a lookup found (see "Reverse DNS names"), or `null`; a record without `host`, as written by an earlier version of the server, counts as `null`.
 - `view` holds the dashboard's sort column (one of `blocked`, `ip`, `items`, `first_seen`, `last_seen`, `requests`, `host`), whether the sort direction is inverted, and whether the `HOST` and `UA` columns are shown. It may be left out, and then the values shown above apply.
 
 If the state file does not exist, the server starts at position 0 and creates it. So check the path if a restarted server reports that it created the state file: a mistyped `--state-file`, or an item file that was moved or renamed (which moves the default state file path), makes the server start again at line 0 without its block list. A state file that exists but cannot be read, or that is not exactly in this form, is a startup error, and so is a `position` greater than the number of lines in the item file.
 
 The server saves the state file at startup, every 30 seconds while anything in it has changed, at once after a block, an unblock, or a wrap, and at every clean exit (see "Exiting"). It saves by writing a new file and renaming it over the old one, so the state file is always complete. After a crash, a `kill -9`, or a power loss, the server starts again from the last save, which is normally at most about 30 seconds old: the lines handed out after that save are handed out a second time. No line is skipped.
 
-Reverse DNS names, the events, the rates, and the pause are not saved.
+The events, the rates, and the pause are not saved, and neither is a lookup that found no name.
 
-To change the state, stop the server, edit the state file, and start the server again. For example, to serve a new item file from its first line, set `position` to 0. To block an IP address that has never made a request, add a record for it with `"blocked": true`; every record needs all six fields. The server cannot notice that the item file was replaced while it was stopped: it applies the saved position to whatever file is at the path when it starts.
+To change the state, stop the server, edit the state file, and start the server again. For example, to serve a new item file from its first line, set `position` to 0. To block an IP address that has never made a request, add a record for it with `"blocked": true`; every record needs all of the fields shown above except `host`. The server cannot notice that the item file was replaced while it was stopped: it applies the saved position to whatever file is at the path when it starts.
 
 ### The lock file
 
@@ -171,9 +172,10 @@ Quitting the dashboard stops the server. The sort column, the sort direction, an
 
 The `HOST` column shows the reverse DNS name (the `PTR` record) of each client IP address, as a hint about who the client is.
 
-- Each client is looked up at most once per run of the server, at its first request in that run, in the background. At most 8 lookups run at the same time, and further ones wait their turn. A lookup is given up 5 seconds after it started running; its wait for a turn does not count.
+- A client without a name is looked up at its first request in each run of the server, in the background, and not again in that run. At most 8 lookups run at the same time, and further ones wait their turn. A lookup is given up 5 seconds after it started running; its wait for a turn does not count.
+- A name that a lookup found is saved in the state file. So the dashboard shows it from the start of the next run, and the client is never looked up again. To have a saved name looked up again, stop the server, set the client's `host` to `null` in the state file, and start the server again.
 - Lookups run also while the `HOST` column is hidden.
-- An empty `HOST` cell means that the client's lookup has not started or not finished yet in this run; `-` means that the lookup didn't find a name, failed, or was given up.
+- An empty `HOST` cell means that the client doesn't have a name and that its lookup has not started or not finished yet in this run; `-` means that its lookup in this run didn't find a name, failed, or was given up.
 - The `HOST` column is as wide as its longest name, so a long name leaves less room for `UA`, or none. A name longer than the rest of the row is shown as `…` followed by its end, because the domain is at the end.
 - The names are not verified. Nothing checks that a name resolves back to the IP address, so the owner of an address can publish any name for it.
 - The lookups send the client IP addresses to the DNS resolver that the system is configured with (`/etc/resolv.conf`).

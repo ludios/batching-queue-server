@@ -22,9 +22,6 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 /// cost a client its name for the whole run.
 const TRY_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// The most `char`s of a name that are kept: its last ones, because the domain is at the end.
-const MAX_NAME_CHARS: usize = 255;
-
 /// Asks the DNS for the `PTR` records of an IP address.
 ///
 /// Returns the records of the answer in their order, or the reason why there isn't an answer.
@@ -32,9 +29,9 @@ pub type LookUp =
     Arc<dyn Fn(IpAddr) -> Pin<Box<dyn Future<Output = Result<Vec<Record>>> + Send>> + Send + Sync>;
 
 /// Returns the target name of the first `PTR` record in `answer` (skipping records of every
-/// other type), in ASCII form, without its final `.`, cleaned by `state::clean_for_terminal`,
-/// and cut to its last `MAX_NAME_CHARS` `char`s; or `Host::NoName` if `answer` doesn't have a
-/// `PTR` record or its name is empty.
+/// other type), in ASCII form, without its final `.`, cleaned and cut by
+/// `state::clean_host_name`; or `Host::NoName` if `answer` doesn't have a `PTR` record or its
+/// name is empty.
 fn host_from_answer(answer: &[Record]) -> Host {
     let name = answer.iter().find_map(|record| match &record.data {
         RData::PTR(ptr) => Some(&ptr.0),
@@ -48,18 +45,9 @@ fn host_from_answer(answer: &[Record]) -> Host {
     // in three octal digits (`\033`). So each `char` takes one screen column.
     let ascii = name.to_ascii();
     let ascii = ascii.strip_suffix('.').unwrap_or(&ascii);
-    // Doesn't change the ASCII form, but keeps the terminal safe whatever that form becomes
-    let cleaned = state::clean_for_terminal(ascii.as_bytes(), usize::MAX);
-    let length = cleaned.chars().count();
-    let name: String = cleaned
-        .chars()
-        .skip(length.saturating_sub(MAX_NAME_CHARS))
-        .collect();
-    if name.is_empty() {
-        Host::NoName
-    } else {
-        Host::Name(name)
-    }
+    // The cleaning doesn't change the ASCII form, but keeps the terminal safe whatever that
+    // form becomes
+    state::clean_host_name(ascii).map_or(Host::NoName, Host::Name)
 }
 
 /// Looks up the reverse DNS names of client IP addresses in the background, at most
@@ -185,8 +173,11 @@ mod tests {
             assert_eq!(response.elapsed, Duration::ZERO);
         }
 
+        /// Returns the host of the client at `ip`, which must have a client record.
         fn host(&self, ip: IpAddr) -> Host {
-            self.shared.state.lock().unwrap().host(ip)
+            self.shared.state.lock().unwrap().clients()[&ip]
+                .host
+                .clone()
         }
     }
 
@@ -212,6 +203,7 @@ mod tests {
             first_seen: time,
             last_seen: time,
             user_agent: None,
+            host: Host::NotLookedUp,
         };
         let server = server(resolver, BTreeMap::from([(ip(2), loaded)]));
 
@@ -274,21 +266,46 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn names_are_not_saved() {
-        let server = server(
-            resolver(|_| async { Ok(vec![ptr("client.example.com.")]) }),
-            BTreeMap::new(),
-        );
-        server.get_from(ip(1)).await;
+    async fn a_saved_name_is_shown_at_once_and_not_looked_up_again() {
+        // Client 1 has a name, and client 2 doesn't
+        let looked_up = Arc::new(Mutex::new(Vec::new()));
+        let resolver = resolver({
+            let looked_up = looked_up.clone();
+            move |ip| {
+                looked_up.lock().unwrap().push(ip);
+                async move {
+                    if ip == self::ip(1) {
+                        Ok(vec![ptr(&name(1))])
+                    } else {
+                        Ok(vec![])
+                    }
+                }
+            }
+        });
+        let first = server(resolver.clone(), BTreeMap::new());
+        first.get_from(ip(1)).await;
+        first.get_from(ip(2)).await;
         sleep(1.0).await;
-        assert_eq!(
-            server.host(ip(1)),
-            Host::Name("client.example.com".to_owned())
+        assert_eq!(first.host(ip(2)), Host::NoName);
+        first.shared.save().unwrap();
+        let saved = std::fs::read_to_string(first.shared.path()).unwrap();
+        assert!(
+            saved.contains(r#""host": "client-1.example.com""#),
+            "{saved}"
         );
-        server.shared.save().unwrap();
-        let saved = std::fs::read_to_string(server.shared.path()).unwrap();
-        assert!(saved.contains("203.0.113.1"), "{saved}");
-        assert!(!saved.contains("example"), "{saved}");
+        assert!(saved.contains(r#""host": null"#), "{saved}");
+
+        let loaded = state::load(first.shared.path()).unwrap().unwrap();
+        let second = server(resolver, loaded.clients);
+        let host_1 = Host::Name("client-1.example.com".to_owned());
+        assert_eq!(second.host(ip(1)), host_1);
+        assert_eq!(second.host(ip(2)), Host::NotLookedUp);
+        second.get_from(ip(1)).await;
+        second.get_from(ip(2)).await;
+        sleep(1.0).await;
+        assert_eq!(*looked_up.lock().unwrap(), [ip(1), ip(2), ip(2)]);
+        assert_eq!(second.host(ip(1)), host_1);
+        assert_eq!(second.host(ip(2)), Host::NoName);
     }
 
     #[tokio::test(start_paused = true)]

@@ -70,7 +70,6 @@ pub struct Config {
 struct Row {
     ip: IpAddr,
     client: Client,
-    host: Host,
 }
 
 /// What the dashboard copies out of the state for one frame, so that it draws without holding
@@ -194,7 +193,7 @@ fn compare_rows(view: &View, a: &Row, b: &Row) -> Ordering {
         Column::Last => directed(a.client.last_seen.cmp(&b.client.last_seen)),
         Column::Reqs => directed(a.client.requests.cmp(&b.client.requests)),
         // Clients without a name come last in both directions
-        Column::Host => match (&a.host, &b.host) {
+        Column::Host => match (&a.client.host, &b.client.host) {
             (Host::Name(a), Host::Name(b)) => directed(compare_hosts(a, b)),
             (Host::Name(_), _) => Ordering::Less,
             (_, Host::Name(_)) => Ordering::Greater,
@@ -224,7 +223,6 @@ fn snapshot(shared: &Shared, events: usize, instant: Instant) -> Snapshot {
                 .map(|(&ip, client)| Row {
                     ip,
                     client: client.clone(),
-                    host: state.host(ip),
                 })
                 .collect(),
             events: all_events
@@ -304,7 +302,7 @@ fn cell(column: Column, row: &Row, now: Timestamp) -> String {
         Column::First => age(now, row.client.first_seen),
         Column::Last => age(now, row.client.last_seen),
         Column::Reqs => thousands(row.client.requests),
-        Column::Host => match &row.host {
+        Column::Host => match &row.client.host {
             Host::NotLookedUp => String::new(),
             Host::NoName => "-".to_owned(),
             Host::Name(name) => name.clone(),
@@ -1068,6 +1066,7 @@ mod tests {
             first_seen: time("2026-11-21T12:00:00Z"),
             last_seen: time("2026-11-24T11:59:58Z"),
             user_agent: Some("curl/8.9.1".to_owned()),
+            host: Host::NotLookedUp,
         }
     }
 
@@ -1525,8 +1524,10 @@ mod tests {
     fn row(ip: IpAddr, host: Host) -> Row {
         Row {
             ip,
-            client: client(1, 1),
-            host,
+            client: Client {
+                host,
+                ..client(1, 1)
+            },
         }
     }
 
@@ -1796,8 +1797,8 @@ mod tests {
                         first_seen,
                         last_seen,
                         user_agent,
+                        host,
                     },
-                    host,
                 },
             )
     }

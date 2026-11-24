@@ -5,9 +5,9 @@ use crate::queue::{Batch, Queue};
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
 use serde::de::{Error as _, MapAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::fmt;
 use std::fs::{self, File, OpenOptions, TryLockError};
@@ -27,6 +27,10 @@ const VERSION: u64 = 1;
 
 /// The most `char`s of a `User-Agent` value that are kept.
 const MAX_USER_AGENT_CHARS: usize = 200;
+
+/// The most `char`s of a host name that are kept: its last ones, because the domain is at the
+/// end.
+const MAX_HOST_CHARS: usize = 255;
 
 /// The most events that are kept.
 const MAX_EVENTS: usize = 1000;
@@ -53,6 +57,24 @@ pub fn clean_for_terminal(bytes: &[u8], max_chars: usize) -> String {
         .collect()
 }
 
+/// Makes a reverse DNS name safe to draw on a terminal: cleans `name` by `clean_for_terminal`
+/// and cuts it to its last `MAX_HOST_CHARS` `char`s.
+///
+/// Returns None if `name` is empty.
+pub fn clean_host_name(name: &str) -> Option<String> {
+    if name.is_empty() {
+        return None;
+    }
+    let cleaned = clean_for_terminal(name.as_bytes(), usize::MAX);
+    let length = cleaned.chars().count();
+    Some(
+        cleaned
+            .chars()
+            .skip(length.saturating_sub(MAX_HOST_CHARS))
+            .collect(),
+    )
+}
+
 /// What is known about one client IP address.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -70,6 +92,14 @@ pub struct Client {
     /// file, even when it is null.)
     #[serde(deserialize_with = "deserialize_user_agent")]
     pub user_agent: Option<String>,
+    /// What the reverse DNS lookups of this client have found. The state file holds only a
+    /// name; a client without one gets `Host::NotLookedUp` when it is loaded.
+    #[serde(
+        default,
+        serialize_with = "serialize_host",
+        deserialize_with = "deserialize_host"
+    )]
+    pub host: Host,
 }
 
 /// Deserializes a `user_agent` of a state file, cleaned as a live one is.
@@ -81,6 +111,25 @@ fn deserialize_user_agent<'de, D: Deserializer<'de>>(
         user_agent
             .map(|user_agent| clean_for_terminal(user_agent.as_bytes(), MAX_USER_AGENT_CHARS)),
     )
+}
+
+/// Serializes the `host` of a client for the state file: as its name, or as null. So
+/// `Host::NoName` is not saved, and the client is looked up again in the next run.
+fn serialize_host<S: Serializer>(host: &Host, serializer: S) -> Result<S::Ok, S::Error> {
+    match host {
+        Host::Name(name) => serializer.serialize_some(name),
+        Host::NotLookedUp | Host::NoName => serializer.serialize_none(),
+    }
+}
+
+/// Deserializes the `host` of a client in a state file: a name, cleaned as a live one is, or
+/// null. An empty name counts as null.
+fn deserialize_host<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Host, D::Error> {
+    let name = Option::<String>::deserialize(deserializer)?;
+    Ok(name
+        .as_deref()
+        .and_then(clean_host_name)
+        .map_or(Host::NotLookedUp, Host::Name))
 }
 
 /// Deserializes the `clients` of a state file, with each IP address in its canonical form (see
@@ -118,14 +167,17 @@ fn deserialize_clients<'de, D: Deserializer<'de>>(
     deserializer.deserialize_map(ClientsVisitor)
 }
 
-/// What the reverse DNS lookup of a client found.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// What the reverse DNS lookups of a client have found.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum Host {
-    /// Not looked up yet in this run of the server, or the lookup has not finished.
+    /// Neither a name from the state file nor a finished lookup in this run of the server.
+    #[default]
     NotLookedUp,
-    /// Looked up, without a name: no `PTR` record, an empty name, an error, or given up.
+    /// Looked up in this run, without a name: no `PTR` record, an empty name, an error, or
+    /// given up.
     NoName,
-    /// Looked up, with this name, cleaned by `clean_for_terminal`.
+    /// This name, cleaned by `clean_host_name`, found in this run or loaded from the state
+    /// file.
     Name(String),
 }
 
@@ -297,10 +349,9 @@ pub struct State {
     /// for each IP address that has made a request since.
     clients: BTreeMap<IpAddr, Client>,
     view: View,
-    /// What the reverse DNS lookup found, for each client that has been marked for a lookup in
-    /// this run of the server (see `mark_for_lookup`): `Host::NotLookedUp` while its lookup waits
-    /// for its turn or runs. Never saved.
-    hosts: HashMap<IpAddr, Host>,
+    /// The clients that have been marked for a reverse DNS lookup in this run of the server (see
+    /// `mark_for_lookup`).
+    marked: HashSet<IpAddr>,
     /// The most recent requests, at most `MAX_EVENTS`, in the order they were recorded.
     events: VecDeque<Event>,
     rates: Rates,
@@ -329,7 +380,7 @@ impl State {
             wraps,
             clients,
             view,
-            hosts: HashMap::new(),
+            marked: HashSet::new(),
             events: VecDeque::with_capacity(MAX_EVENTS),
             rates: Rates::new(Instant::now()),
             paused: false,
@@ -374,6 +425,7 @@ impl State {
             first_seen: now,
             last_seen: now,
             user_agent: None,
+            host: Host::NotLookedUp,
         });
         // Saturating, because a state file may hold any u64
         client.requests = client.requests.saturating_add(1);
@@ -487,39 +539,49 @@ impl State {
         }
     }
 
-    /// Marks the client at `ip` (in its canonical form) for a reverse DNS lookup, unless it has
-    /// been marked before in this run of the server.
+    /// Marks the client at `ip` (in its canonical form), which must have a client record, for a
+    /// reverse DNS lookup, unless it has a name or has been marked before in this run of the
+    /// server.
     ///
     /// Returns whether it has been marked now, so that the caller looks it up.
     pub fn mark_for_lookup(&mut self, ip: IpAddr) -> bool {
-        assert_eq!(ip, ip.to_canonical(), "the IP address must be canonical");
-        if self.hosts.contains_key(&ip) {
+        let client = self.clients.get(&ip).expect("the client has a record");
+        if let Host::Name(_) = client.host {
             return false;
         }
-        self.hosts.insert(ip, Host::NotLookedUp);
-        true
+        self.marked.insert(ip)
     }
 
     /// Stores `host`, which the reverse DNS lookup of the client at `ip` found. That client must
     /// have been marked for a lookup (see `mark_for_lookup`), and its lookup must not have
-    /// finished before.
+    /// finished before. A name is saved at the next periodic save. After `stop`, does nothing,
+    /// because the final save may have been taken.
     pub fn set_host(&mut self, ip: IpAddr, host: Host) {
         assert_ne!(
             host,
             Host::NotLookedUp,
             "a finished lookup found a name or none"
         );
-        let entry = self
-            .hosts
+        assert!(
+            self.marked.contains(&ip),
+            "the client was marked for a lookup"
+        );
+        if self.stopped {
+            return;
+        }
+        let client = self
+            .clients
             .get_mut(&ip)
-            .expect("the client was marked for a lookup");
-        assert_eq!(*entry, Host::NotLookedUp, "a client is looked up only once");
-        *entry = host;
-    }
-
-    /// Returns what the reverse DNS lookup of the client at `ip` has found in this run.
-    pub fn host(&self, ip: IpAddr) -> Host {
-        self.hosts.get(&ip).cloned().unwrap_or(Host::NotLookedUp)
+            .expect("a marked client has a record");
+        assert_eq!(
+            client.host,
+            Host::NotLookedUp,
+            "a client is looked up only once"
+        );
+        if let Host::Name(_) = host {
+            self.dirty = true;
+        }
+        client.host = host;
     }
 
     /// Pauses handing out lines, or resumes it. A pause is not saved.
@@ -823,6 +885,7 @@ mod tests {
                 // The clock may jump back
                 last_seen: time("2026-11-24T11:00:00Z"),
                 user_agent: Some("?second".to_owned()),
+                host: Host::NotLookedUp,
             }
         );
         state.take(IP, 2).unwrap();
@@ -945,11 +1008,14 @@ mod tests {
         let (_dir, shared) = setup(3);
         let mut state = shared.state.lock().unwrap();
         state.record_request(IP, time("2026-11-24T12:00:00Z"), None);
+        assert!(state.mark_for_lookup(IP));
         state.stop();
         state.set_blocked(IP, true);
         state.set_view(VIEW);
+        state.set_host(IP, Host::Name("client.example.com".to_owned()));
         assert!(!state.clients[&IP].blocked);
         assert_eq!(state.view, View::default());
+        assert_eq!(state.clients[&IP].host, Host::NotLookedUp);
     }
 
     #[test]
@@ -1015,6 +1081,8 @@ mod tests {
             state.record_request(ipv6, time("2026-11-24T12:01:02Z"), Some(b"curl/8.9.1"));
             state.set_blocked(ipv6, true);
             state.set_view(VIEW);
+            assert!(state.mark_for_lookup(IP));
+            state.set_host(IP, Host::Name("client.example.com".to_owned()));
         }
         shared.save().unwrap();
         let loaded = load(shared.path()).unwrap().unwrap();
@@ -1041,7 +1109,8 @@ mod tests {
       "requests": 3,
       "first_seen": "2026-11-24T12:00:00Z",
       "last_seen": "2026-11-24T12:00:00Z",
-      "user_agent": null
+      "user_agent": null,
+      "host": "client.example.com"
     },
     "2001:db8::17": {
       "blocked": true,
@@ -1049,7 +1118,8 @@ mod tests {
       "requests": 1,
       "first_seen": "2026-11-24T12:01:02Z",
       "last_seen": "2026-11-24T12:01:02Z",
-      "user_agent": "curl/8.9.1"
+      "user_agent": "curl/8.9.1",
+      "host": null
     }
   }
 }
@@ -1060,25 +1130,35 @@ mod tests {
     #[test]
     fn loaded_clients_are_treated_like_live_ones() {
         let (_dir, shared) = setup(3);
-        let client = |user_agent: &str| {
+        // `rest` ends the fields of the client
+        let client = |user_agent: &str, rest: &str| {
             format!(
                 r#"{{"blocked": true, "items": 1, "requests": 2, "first_seen": "2026-11-24T12:00:00Z",
-                    "last_seen": "2026-11-24T12:00:00Z", "user_agent": {user_agent}}}"#
+                    "last_seen": "2026-11-24T12:00:00Z", "user_agent": {user_agent}{rest}}}"#
             )
         };
         let contents = format!(
-            r#"{{"version": 1, "position": 0, "wraps": 0, "clients": {{"::ffff:203.0.113.7": {}, "::1": {}}}}}"#,
-            client(r#""\u001b[2Jx""#),
-            client("null"),
+            r#"{{"version": 1, "position": 0, "wraps": 0, "clients": {{"::ffff:203.0.113.7": {}, "::1": {}, "::2": {}}}}}"#,
+            client(r#""\u001b[2Jx""#, r#", "host": "\u001b[2Jx.example.com""#),
+            client("null", ""),
+            client("null", r#", "host": """#),
         );
         fs::write(shared.path(), contents).unwrap();
         let loaded = load(shared.path()).unwrap().unwrap();
+        let ipv6 = |text: &str| text.parse::<IpAddr>().unwrap();
         assert_eq!(
             loaded.clients.keys().collect::<Vec<_>>(),
-            [&IP, &"::1".parse::<IpAddr>().unwrap()]
+            [&IP, &ipv6("::1"), &ipv6("::2")]
         );
         assert_eq!(loaded.clients[&IP].user_agent.as_deref(), Some("?[2Jx"));
         assert!(loaded.clients[&IP].blocked);
+        assert_eq!(
+            loaded.clients[&IP].host,
+            Host::Name("?[2Jx.example.com".to_owned())
+        );
+        // Without a name, as in a state file of an earlier build, or with an empty one
+        assert_eq!(loaded.clients[&ipv6("::1")].host, Host::NotLookedUp);
+        assert_eq!(loaded.clients[&ipv6("::2")].host, Host::NotLookedUp);
     }
 
     /// Writes `contents` to the state file and returns the message of the error from loading it.
@@ -1161,6 +1241,16 @@ mod tests {
                     &format!(r#"{{"1.2.3.4": {}}}"#, client.replace("1,", "\"1\",")),
                 ),
                 "invalid type: string \"1\"",
+            ),
+            (
+                &valid.replace(
+                    "{}",
+                    &format!(
+                        r#"{{"1.2.3.4": {}}}"#,
+                        client.replace("null", r#"null, "host": 1"#)
+                    ),
+                ),
+                "invalid type: integer `1`, expected a string",
             ),
             (
                 &valid.replace(
