@@ -557,15 +557,19 @@ impl Dashboard {
 
         let view = &snapshot.view;
         let columns = place_columns(view, rows, now, area.x, area.width);
-        let header_style = Style::new().add_modifier(Modifier::BOLD);
+        // Black on green as in htop, and the sort column on cyan
+        let header_style = Style::new().fg(Color::Black).bg(Color::Green);
+        buf.set_style(Rect::new(area.x, area.y, area.width, 1), header_style);
         for placed in &columns {
-            let arrow = match placed.column {
-                column if column != view.sort_column => "",
-                _ if is_descending(view) => "▼",
-                _ => "▲",
-            };
+            let mut style = header_style;
+            let mut arrow = "";
+            if placed.column == view.sort_column {
+                style = style.bg(Color::Cyan);
+                arrow = if is_descending(view) { "▼" } else { "▲" };
+            }
+            buf.set_style(Rect::new(placed.x, area.y, placed.width, 1), style);
             let text = format!("{}{arrow}", header(placed.column));
-            placed.draw(buf, area.y, &text, header_style);
+            placed.draw(buf, area.y, &text, style);
         }
         self.drawn.header_y = Some(area.y);
 
@@ -1218,6 +1222,14 @@ mod tests {
         assert_eq!(buffer[(x + 6, 0)].fg, Color::DarkGray);
         let (x, _) = find(&screen[..1], "1 blocked");
         assert_eq!(buffer[(x, 0)].fg, Color::Red);
+
+        // The header row is green, but the header of the sort column is cyan
+        assert_eq!(buffer[(99, 2)].bg, Color::Green);
+        let (x, _) = find(&screen[2..3], "ITEMS▼");
+        assert_eq!(buffer[(x - 1, 2)].bg, Color::Green);
+        assert_eq!(buffer[(x, 2)].bg, Color::Cyan);
+        assert_eq!(buffer[(x + 5, 2)].bg, Color::Cyan);
+        assert_eq!(buffer[(x + 6, 2)].bg, Color::Green);
     }
 
     #[test]
