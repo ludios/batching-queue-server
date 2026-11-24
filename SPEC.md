@@ -317,7 +317,7 @@ F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
 3. **Events pane**: the most recent events, newest at the bottom, as many as fit.
 4. **Key bar** (1 row). As in `htop`, the key names are in the terminal's colors and the rest of the row is black on cyan.
 
-In the status line, values are bold and the words between them are dark gray, so that the values stand out; a count of blocked IPs above 0 is red. While the server is paused, the status line starts with `PAUSED` in a standout style (for example reverse video), and the key bar shows `F5 Resume` in place of `F5 Pause`.
+In the status line, values are bold and the words between them are dim (not dark gray, which some palettes make the background color), so that the values stand out; a count of blocked IPs above 0 is red. While the server is paused, the status line starts with `PAUSED` in a standout style (for example reverse video), and the key bar shows `F5 Resume` in place of `F5 Pause`.
 
 Let R be the number of rows between the blank row and the key bar. The events pane gets R / 3 rows, rounded down; the clients table, including its header row, gets the rest.
 

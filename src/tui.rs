@@ -473,8 +473,11 @@ impl Dashboard {
     /// Returns the status line for `snapshot`, without its `PAUSED` part. Its values are bold;
     /// the words between them are dimmed.
     fn status(&self, snapshot: &Snapshot) -> Line<'static> {
-        let value = |text: String| Span::styled(text, Style::new().add_modifier(Modifier::BOLD));
-        let label = |text: &'static str| Span::styled(text, Style::new().fg(Color::DarkGray));
+        let bold = Style::new().add_modifier(Modifier::BOLD);
+        // Dim, and not dark gray: some palettes make dark gray the background color
+        let dim = Style::new().add_modifier(Modifier::DIM);
+        let value = |text: String| Span::styled(text, bold);
+        let label = |text: &'static str| Span::styled(text, dim);
         let mut spans = vec![
             value(self.config.name.clone()),
             label(" :"),
@@ -1230,7 +1233,7 @@ mod tests {
         let buffer = test.terminal.backend().buffer();
         let (x, _) = find(&screen[..1], "1,000 items/min");
         assert!(buffer[(x, 0)].modifier.contains(Modifier::BOLD));
-        assert_eq!(buffer[(x + 6, 0)].fg, Color::DarkGray);
+        assert!(buffer[(x + 6, 0)].modifier.contains(Modifier::DIM));
         let (x, _) = find(&screen[..1], "1 blocked");
         assert_eq!(buffer[(x, 0)].fg, Color::Red);
 
