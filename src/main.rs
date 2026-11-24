@@ -11,6 +11,7 @@ use queue::Queue;
 use socket2::{Domain, Protocol, Socket, Type};
 use state::{Shared, State};
 use std::fs::{self, File};
+use std::io::Write;
 use std::net::{Ipv6Addr, SocketAddr};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
@@ -113,6 +114,12 @@ struct Server {
     _lock: File,
 }
 
+/// Writes `line`, after the name of the program, to stderr. Unlike `eprintln!`, does not panic
+/// (which aborts the server) when stderr is gone, as it is after the terminal window is closed.
+fn print_line(line: &str) {
+    let _ = writeln!(std::io::stderr(), "batching-queue-server: {line}");
+}
+
 /// Does the startup checks, loads the state, binds the port, and saves the state once.
 fn start(args: &Args) -> Result<Server> {
     let state_file = args.state_file();
@@ -141,16 +148,16 @@ fn start(args: &Args) -> Result<Server> {
 
     let cycling = if args.cycle { "on" } else { "off" };
     if created {
-        eprintln!(
-            "batching-queue-server: created the state file {}; starting at the first of {total} lines; cycling is {cycling}",
+        print_line(&format!(
+            "created the state file {}; starting at the first of {total} lines; cycling is {cycling}",
             shared.path().display()
-        );
+        ));
     } else {
-        eprintln!(
-            "batching-queue-server: loaded position {} of {total} lines from the state file {}; cycling is {cycling}",
+        print_line(&format!(
+            "loaded position {} of {total} lines from the state file {}; cycling is {cycling}",
             loaded.position,
             shared.path().display()
-        );
+        ));
     }
 
     let (fatal_sender, fatal) = mpsc::unbounded_channel();
@@ -230,6 +237,9 @@ fn main() {
     tracing_subscriber::fmt()
         .with_writer(std::io::stderr)
         .with_target(false)
+        // Otherwise a failed write to stderr is reported with `eprintln!`, which panics when
+        // stderr is gone
+        .log_internal_errors(false)
         .init();
     let runtime = tokio::runtime::Runtime::new().expect("the tokio runtime starts");
     let result = runtime.block_on(async {
@@ -238,7 +248,7 @@ fn main() {
         serve(server, exit).await
     });
     if let Err(error) = result {
-        eprintln!("batching-queue-server: {error:#}");
+        print_line(&format!("{error:#}"));
         std::process::exit(1);
     }
     std::process::exit(0);

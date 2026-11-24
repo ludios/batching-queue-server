@@ -1,7 +1,8 @@
 //! The lock on the state file, with real server processes.
 
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::{Child, ChildStderr, Command, Stdio};
 
@@ -14,16 +15,31 @@ fn free_port() -> u16 {
         .port()
 }
 
-/// Starts the server binary for the item file at `item_file`, with stderr piped.
-fn spawn(item_file: &Path) -> Child {
+/// Starts the server binary for the item file at `item_file` on `port`, with stderr piped.
+fn spawn_on(item_file: &Path, port: u16) -> Child {
     Command::new(env!("CARGO_BIN_EXE_batching-queue-server"))
         .arg("--port")
-        .arg(free_port().to_string())
+        .arg(port.to_string())
         .arg(item_file)
         .stdin(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .unwrap()
+}
+
+/// Starts the server binary for the item file at `item_file`, with stderr piped.
+fn spawn(item_file: &Path) -> Child {
+    spawn_on(item_file, free_port())
+}
+
+/// Sends SIGTERM to `child`.
+fn terminate(child: &Child) {
+    let status = Command::new("kill")
+        .arg("-TERM")
+        .arg(child.id().to_string())
+        .status()
+        .unwrap();
+    assert!(status.success());
 }
 
 /// Reads lines from `stderr` until the line that says the server has started, and returns it.
@@ -67,14 +83,36 @@ fn a_killed_server_leaves_no_lock_behind() {
     assert!(dir.path().join("items.txt.bqs.json.lock").exists());
 
     let (mut third, mut third_stderr) = start(&item_file);
-    let status = Command::new("kill")
-        .arg("-TERM")
-        .arg(third.id().to_string())
-        .status()
-        .unwrap();
-    assert!(status.success());
+    terminate(&third);
     assert_eq!(third.wait().unwrap().code(), Some(0));
     let mut rest = String::new();
-    std::io::Read::read_to_string(third_stderr.get_mut(), &mut rest).unwrap();
+    third_stderr.read_to_string(&mut rest).unwrap();
     assert!(rest.contains("received SIGTERM"), "{rest}");
+}
+
+#[test]
+fn a_server_whose_stderr_is_gone_still_exits_cleanly() {
+    let dir = tempfile::tempdir().unwrap();
+    let item_file = dir.path().join("items.txt");
+    fs::write(&item_file, "a\nb\n").unwrap();
+    let port = free_port();
+    let mut server = spawn_on(&item_file, port);
+    let mut stderr = BufReader::new(server.stderr.take().unwrap());
+    startup_line(&mut stderr);
+    // As when the terminal window is closed: every later write to stderr fails
+    drop(stderr);
+
+    // Logs a line, which fails
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: test\r\nConnection: close\r\n\r\n")
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    assert!(response.ends_with("\r\n\r\na\n"), "{response:?}");
+
+    terminate(&server);
+    assert_eq!(server.wait().unwrap().code(), Some(0));
+    let state = fs::read_to_string(dir.path().join("items.txt.bqs.json")).unwrap();
+    assert!(state.contains("\"position\": 1,"), "{state}");
 }
