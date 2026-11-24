@@ -32,6 +32,11 @@ tower = { version = "0.5", features = ["util"] }
 debug = false
 panic = "abort"
 
+# Optimize build scripts and proc-macros
+[profile.dev.build-override]
+opt-level = 3
+
+# Optimize our dependencies (but not our own crate to avoid long rebuild times)
 [profile.dev.package."*"]
 opt-level = 3
 
