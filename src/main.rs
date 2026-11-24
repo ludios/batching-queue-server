@@ -497,6 +497,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_block_and_the_counters_survive_a_restart() {
+        let (_dir, args) = setup("a\nb\n");
+        let server = Running::start(&args);
+        assert_eq!(server.get("/").await, (200, "a\n".to_owned()));
+        server.exit().await.unwrap();
+
+        // As the operator blocks a client while the server is stopped
+        let contents = fs::read_to_string(args.state_file()).unwrap();
+        let blocked = contents.replace(r#""blocked": false"#, r#""blocked": true"#);
+        assert_ne!(blocked, contents);
+        fs::write(args.state_file(), blocked).unwrap();
+
+        let server = Running::start(&args);
+        assert_eq!(server.get("/").await, (403, String::new()));
+        server.exit().await.unwrap();
+        let loaded = state::load(&args.state_file()).unwrap().unwrap();
+        let client = &loaded.clients[&"127.0.0.1".parse().unwrap()];
+        assert_eq!(loaded.position, 1);
+        assert_eq!(
+            (client.blocked, client.requests, client.items),
+            (true, 2, 1)
+        );
+    }
+
+    #[tokio::test]
     async fn without_cycling_the_position_stays_at_the_end() {
         let (_dir, args) = setup("a\nb\n");
         let server = Running::start(&args);

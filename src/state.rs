@@ -522,6 +522,13 @@ mod tests {
         );
         state.take(IP, 2).unwrap();
         assert_eq!(state.clients[&IP].items, 2);
+
+        let long = "é".repeat(MAX_USER_AGENT_CHARS + 1);
+        let client = state.record_request(IP, time("2026-11-24T12:00:00Z"), Some(long.as_bytes()));
+        assert_eq!(
+            client.user_agent.as_ref().unwrap().chars().count(),
+            MAX_USER_AGENT_CHARS
+        );
     }
 
     #[test]
@@ -791,6 +798,15 @@ mod tests {
         take(&mut shared.state.lock().unwrap(), 1);
         tokio::time::sleep(SAVE_INTERVAL / 2).await;
         assert_eq!(load(shared.path()).unwrap().unwrap().position, 2);
+
+        // A request that hands out no line changes the client record, which is saved too
+        let now = time("2026-11-24T12:00:00Z");
+        shared.state.lock().unwrap().record_request(IP, now, None);
+        tokio::time::sleep(SAVE_INTERVAL).await;
+        assert_eq!(
+            load(shared.path()).unwrap().unwrap().clients[&IP].requests,
+            3
+        );
     }
 
     #[tokio::test(start_paused = true)]
