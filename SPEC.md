@@ -166,7 +166,7 @@ The dashboard shows the reverse DNS name (the PTR record) of each client IP, as 
 - At most 8 lookups run at the same time; further ones wait their turn, for as long as that takes. A lookup is given up 5 seconds after it started running (not 5 seconds after it began to wait).
 - Use the resolver configuration of the system (`/etc/resolv.conf`).
 - If the resolver cannot be set up (for example because `/etc/resolv.conf` is missing), that is not an error: the server runs, and every client that would be looked up counts as looked up without a name.
-- The result is the target name of the first `PTR` record in the answer, without its final `.`. Skip records of every other type; an answer can contain a `CNAME` record before the `PTR` record. A result that is empty counts as no name. The owner of the reverse zone controls this name, and it is drawn on the operator's terminal, so clean it in the same way as a `User-Agent` value. If it is longer than 255 `char`s, keep its last 255, because the domain is at the end.
+- The result is the target name of the first `PTR` record in the answer, in hickory's ASCII form (`Name::to_ascii`), without its final `.`. Skip records of every other type; an answer can contain a `CNAME` record before the `PTR` record. A result that is empty counts as no name. The ASCII form keeps internationalized labels as `xn--…`, and escapes every other byte that is not a letter, a digit, `-`, or `_`: as `\` and the byte if it is printable (`\[`), or else as `\` and three octal digits (`\033` for ESC). So each `char` of it takes one screen column. The owner of the reverse zone controls this name, and it is drawn on the operator's terminal, so also replace each control character in it with `?`, as in a `User-Agent` value; the ASCII form doesn't have any, but this keeps the terminal safe whatever that form becomes. Don't cut it to its first 200 `char`s, as a `User-Agent` value is cut: if it is longer than 255 `char`s, keep its last 255, because the domain is at the end.
 - So a client is in one of three states: not looked up yet; looked up, with a name; looked up, without a name (no `PTR` record, an error, or given up).
 - Names are kept in memory only. They are not saved in the state file.
 - Without a dashboard, do no lookups.
@@ -285,7 +285,7 @@ A panic anywhere must end the whole process, never leave a half-working server. 
 
 ### When it runs
 
-If both stdin and stdout are terminals, the server draws the dashboard. Otherwise it runs without one and writes one log line per event to stderr with `tracing`. In dashboard mode, nothing but the dashboard may write to the terminal, so do not install a `tracing` output there.
+If both stdin and stdout are terminals, and the server is in the foreground process group of the terminal at stdin, the server draws the dashboard. (The kernel stops a background job that switches its terminal to the dashboard.) Otherwise it runs without one and writes one log line per event to stderr with `tracing`. In dashboard mode, nothing but the dashboard may write to the terminal, so install a `tracing` output only if stderr is not a terminal (for example, redirected to a file).
 
 ### Layout
 
@@ -364,7 +364,7 @@ While the dashboard runs, set the title of the terminal window, so that a list o
 | The server is paused | `PAUSED 12.5% items.txt` |
 | Otherwise | `12.5% items.txt` |
 
-The percent is the one from the status line. Write the title only when its text changes. For an item file without lines the percent is `-`, as in the status line, so with cycling on the title is `- items.txt`. (With cycling off, the position 0 equals the total 0, so the first row of the table applies and the title is `DONE items.txt`.) At every exit that restores the terminal (a clean exit, a failure while running, or a panic), set the title to `stopped items.txt`.
+The percent is the one from the status line. Write the title only when its text changes. For an item file without lines the percent is `-`, as in the status line, so with cycling on the title is `- items.txt`, or `PAUSED - items.txt` while paused. (With cycling off, the position 0 equals the total 0, so the first row of the table applies and the title is `DONE items.txt`.) At every exit that restores the terminal (a clean exit, a failure while running, or a panic), set the title to `stopped items.txt`.
 
 The item file name comes from the command line and is written to the terminal, in the title and in the status line. Clean it first in the same way as a `User-Agent` value.
 
@@ -466,7 +466,7 @@ Required, at minimum:
 - With more than 8 new clients at once, at most 8 lookups run at the same time, and all of them finish eventually.
 - A lookup that never answers is given up 5 seconds after it started running, and the client then counts as looked up without a name. A ninth lookup that waited longer than 5 seconds for its turn still runs and can still get its name.
 - An answer with a `CNAME` record before the `PTR` record gives the `PTR` target. A lookup function that reports "resolver not available" makes every client count as looked up without a name, and the server keeps serving.
-- A name with a final `.`, with control characters, or longer than 255 `char`s is stored without the `.`, cleaned, and truncated.
+- A name with a final `.`, with control characters, or longer than 255 `char`s is stored without the `.`, with each control character escaped, and cut to its last 255 `char`s.
 
 **State file** (every test uses an item file in its own fresh temporary directory, because the default state file is written next to the item file)
 
