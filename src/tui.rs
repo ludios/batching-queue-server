@@ -39,9 +39,6 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(200);
 /// The number of blank screen columns between two columns of the clients table.
 const GAP: u16 = 2;
 
-/// The widest a `HOST` cell gets, in screen columns.
-const MAX_HOST_WIDTH: usize = 40;
-
 /// The rows that one turn of the mouse wheel moves the selection by.
 const WHEEL_ROWS: isize = 3;
 
@@ -281,17 +278,6 @@ fn percent(position: u64, total: u64) -> String {
     format!("{}.{}%", tenths / 10, tenths % 10)
 }
 
-/// Returns `name` if it fits in a `HOST` cell, or else `…` followed by as much of its end as
-/// fits, because the domain is at the end.
-fn shorten_host(name: &str) -> String {
-    let length = name.chars().count();
-    if length <= MAX_HOST_WIDTH {
-        return name.to_owned();
-    }
-    let end: String = name.chars().skip(length - (MAX_HOST_WIDTH - 1)).collect();
-    format!("…{end}")
-}
-
 /// Returns the text of the cell of `column` in the row of `row`, at `now`.
 fn cell(column: Column, row: &Row, now: Timestamp) -> String {
     match column {
@@ -308,7 +294,7 @@ fn cell(column: Column, row: &Row, now: Timestamp) -> String {
         Column::Host => match &row.host {
             Host::NotLookedUp => String::new(),
             Host::NoName => "-".to_owned(),
-            Host::Name(name) => shorten_host(name),
+            Host::Name(name) => name.clone(),
         },
         Column::Ua => row.client.user_agent.as_deref().unwrap_or("-").to_owned(),
     }
@@ -1508,18 +1494,13 @@ mod tests {
     }
 
     #[test]
-    fn a_long_host_name_shows_its_end() {
+    fn a_long_host_name_is_shown_whole() {
         let long = format!("{}.example.com", "x".repeat(60));
-        let shortened = shorten_host(&long);
-        assert_eq!(shortened.chars().count(), MAX_HOST_WIDTH);
-        assert_eq!(shortened, format!("…{}.example.com", "x".repeat(27)));
-        assert_eq!(shorten_host(&"y".repeat(40)), "y".repeat(40));
-
-        let mut snapshot = snapshot_with(vec![row(A, Host::Name(long))]);
+        let mut snapshot = snapshot_with(vec![row(A, Host::Name(long.clone()))]);
         snapshot.view.show_ua = true;
-        let screen = draw_snapshot(&snapshot, 120, 6);
+        let screen = draw_snapshot(&snapshot, 160, 6);
         assert!(
-            screen[2].contains(&format!("{shortened}  curl/8.9.1")),
+            screen[2].contains(&format!("{long}  curl/8.9.1")),
             "{screen:?}"
         );
     }
