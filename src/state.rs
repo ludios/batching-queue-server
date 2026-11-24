@@ -125,8 +125,11 @@ pub enum Column {
     Blocked,
     Ip,
     Items,
+    #[serde(rename = "first_seen")]
     First,
+    #[serde(rename = "last_seen")]
     Last,
+    #[serde(rename = "requests")]
     Reqs,
     Host,
     /// The `User-Agent` column, which cannot be the sort column, and so is never in a state file.
@@ -824,6 +827,35 @@ mod tests {
     }
 
     #[test]
+    fn sort_columns_in_the_state_file() {
+        let sortable = [
+            Column::Blocked,
+            Column::Ip,
+            Column::Items,
+            Column::First,
+            Column::Last,
+            Column::Reqs,
+            Column::Host,
+        ];
+        let names = sortable.map(|column| serde_json::to_string(&column).unwrap());
+        assert_eq!(
+            names,
+            [
+                r#""blocked""#,
+                r#""ip""#,
+                r#""items""#,
+                r#""first_seen""#,
+                r#""last_seen""#,
+                r#""requests""#,
+                r#""host""#
+            ]
+        );
+        for (column, name) in sortable.iter().zip(&names) {
+            assert_eq!(serde_json::from_str::<Column>(name).unwrap(), *column);
+        }
+    }
+
+    #[test]
     fn a_changed_view_is_saved_like_any_other_change() {
         let (_dir, shared) = setup(3);
         let mut state = shared.state.lock().unwrap();
@@ -1021,6 +1053,14 @@ mod tests {
                 "invalid type: integer `1`, expected a boolean",
             ),
             (&with_view("ip", ""), "missing field `show_ua`"),
+            (
+                &with_view("reqs", ", \"show_ua\": true"),
+                "unknown variant `reqs`",
+            ),
+            (
+                &valid.replace("{}", r#"{}, "view": null"#),
+                "invalid type: null, expected struct View",
+            ),
             (
                 &with_view("ip", ", \"show_ua\": true, \"x\": 1"),
                 "unknown field `x`",
