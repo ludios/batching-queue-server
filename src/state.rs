@@ -589,12 +589,7 @@ pub fn lock(path: &Path) -> Result<File> {
         .with_context(|| format!("cannot open the lock file {}", lock_path.display()))?;
     match file.try_lock() {
         Ok(()) => Ok(file),
-        Err(TryLockError::WouldBlock) => bail!(
-            "a running server is using the state file {}; its lock on {} cannot be left over \
-             from a crash, because the system releases it when that server's process ends",
-            path.display(),
-            lock_path.display()
-        ),
+        Err(TryLockError::WouldBlock) => bail!("another server is using {}", path.display()),
         Err(TryLockError::Error(error)) => {
             Err(error).with_context(|| format!("cannot lock the lock file {}", lock_path.display()))
         }
