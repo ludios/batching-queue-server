@@ -354,8 +354,8 @@ pub fn load(path: &Path) -> Result<Option<Loaded>> {
 }
 
 /// Replaces the file at `path` with one that holds `contents`, so that after a crash or a power
-/// loss the file holds either its old contents or `contents`. On failure, no temporary file is
-/// left behind.
+/// loss the file holds either its old contents or `contents`. The new file gets the permissions
+/// of the old one. On failure, no temporary file is left behind.
 fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
     let temporary = with_suffix(path, ".tmp");
     let directory = match path.parent() {
@@ -363,11 +363,21 @@ fn write_atomically(path: &Path, contents: &[u8]) -> Result<()> {
         _ => Path::new("."),
     };
     let write = || -> std::io::Result<()> {
+        // Opened before the rename, so that a directory that cannot be opened fails the save
+        // before it changes anything
+        let directory = File::open(directory)?;
         let mut file = File::create(&temporary)?;
+        // Set before any contents are written, so that a state file that its operator has made
+        // private (it holds client IP addresses) stays private
+        match fs::metadata(path) {
+            Ok(metadata) => file.set_permissions(metadata.permissions())?,
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
         file.write_all(contents)?;
         file.sync_all()?;
         fs::rename(&temporary, path)?;
-        File::open(directory)?.sync_all()
+        directory.sync_all()
     };
     let written = write();
     if written.is_err() {
@@ -719,6 +729,17 @@ mod tests {
         };
         let error = format!("{:#}", shared.save().err().unwrap());
         assert!(error.contains("cannot save the state file"), "{error}");
+    }
+
+    #[test]
+    fn a_save_keeps_the_permissions_of_the_state_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, shared) = setup(3);
+        shared.save().unwrap();
+        fs::set_permissions(shared.path(), fs::Permissions::from_mode(0o600)).unwrap();
+        shared.save().unwrap();
+        let mode = fs::metadata(shared.path()).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]
