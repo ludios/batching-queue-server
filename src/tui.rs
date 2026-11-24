@@ -18,6 +18,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::{DefaultTerminal, Terminal, backend::CrosstermBackend};
 use std::cmp::Ordering;
 use std::io::{self, IsTerminal, stdout};
+use std::mem::ManuallyDrop;
 use std::net::IpAddr;
 use std::ops::Range;
 use std::sync::Arc;
@@ -26,6 +27,9 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::time::Instant;
+
+/// The longest time that `Running::finish` waits for the dashboard to restore the terminal.
+const FINISH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The longest time between two frames.
 const FRAME_INTERVAL: Duration = Duration::from_millis(200);
@@ -904,16 +908,20 @@ fn enter_terminal() -> io::Result<DefaultTerminal> {
 /// The dashboard, running on a thread of its own.
 pub struct Running {
     stop: Arc<AtomicBool>,
-    thread: std::thread::JoinHandle<()>,
+    /// Receives a message when the dashboard thread has restored the terminal and ends.
+    finished: Receiver<()>,
 }
 
 impl Running {
-    /// Stops the dashboard, sets the `stopped` title, and restores the terminal.
+    /// Stops the dashboard, which sets the `stopped` title and restores the terminal.
+    ///
+    /// Waits for that at most `FINISH_TIMEOUT`, because a write to a terminal that has stopped
+    /// reading (as a stalled SSH session does) blocks the dashboard thread, and that must not keep
+    /// the process from exiting.
     pub fn finish(self) {
         self.stop.store(true, AtomicOrdering::Relaxed);
-        self.thread
-            .join()
-            .expect("the dashboard thread does not panic");
+        // Ends with the message, with the thread, or with the timeout, as said above
+        let _ = self.finished.recv_timeout(FINISH_TIMEOUT);
     }
 }
 
@@ -921,8 +929,9 @@ impl Running {
 /// its own, until `Running::finish`. A panic anywhere first sets the `stopped` title and restores
 /// the terminal.
 ///
-/// `quit` receives a message each time the operator chooses to quit. `fatal` receives the error
-/// if the terminal fails, after the terminal has been restored as far as possible.
+/// `config` is what the command line says. Through `quit` the dashboard asks the server to exit
+/// cleanly: when the operator chooses to quit, and when the terminal is gone. Through `fatal` it
+/// sends the error if the terminal fails otherwise.
 pub fn start(
     shared: Arc<Shared>,
     config: Config,
@@ -931,37 +940,55 @@ pub fn start(
 ) -> io::Result<Running> {
     let name = config.name.clone();
     let previous_hook = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        restore_terminal(&name);
-        previous_hook(info);
+    std::panic::set_hook(Box::new({
+        let name = name.clone();
+        move |info| {
+            restore_terminal(&name);
+            previous_hook(info);
+        }
     }));
 
-    let mut terminal = match enter_terminal() {
-        Ok(terminal) => terminal,
-        Err(error) => {
-            restore_terminal(&config.name);
-            return Err(error);
-        }
-    };
+    let terminal = enter_terminal().inspect_err(|_| restore_terminal(&name))?;
+    // Never dropped: when the terminal is gone, `Terminal::drop` fails to show the cursor and
+    // reports that with `eprintln!`, which panics, and so aborts the process
+    let mut terminal = ManuallyDrop::new(terminal);
     let (input_sender, inputs) = mpsc::channel();
-    std::thread::Builder::new()
-        .name("terminal input".to_owned())
-        .spawn(move || read_inputs(input_sender))?;
+    let (finished_sender, finished) = mpsc::channel();
     let stop = Arc::new(AtomicBool::new(false));
-    let thread = std::thread::Builder::new()
-        .name("dashboard".to_owned())
-        .spawn({
-            let stop = stop.clone();
-            move || {
-                let mut dashboard = Dashboard::new(config, TimeZone::system());
-                let result = dashboard.run(&mut terminal, &inputs, &shared, &stop, &quit);
-                restore_terminal(&dashboard.config.name);
-                if let Err(error) = result {
+    let dashboard = {
+        let stop = stop.clone();
+        move || {
+            let mut dashboard = Dashboard::new(config, TimeZone::system());
+            let result = dashboard.run(&mut terminal, &inputs, &shared, &stop, &quit);
+            restore_terminal(&dashboard.config.name);
+            // If main has stopped receiving, it is exiting already
+            match result {
+                Ok(()) => {}
+                // The terminal window was closed: a clean exit, as for SIGHUP, which may not have
+                // arrived (yet)
+                Err(_) if !stdout().is_terminal() => {
+                    let _ = quit.send(());
+                }
+                Err(error) => {
                     let _ = fatal.send(anyhow::Error::new(error).context("the terminal failed"));
                 }
             }
-        })?;
-    Ok(Running { stop, thread })
+            let _ = finished_sender.send(());
+        }
+    };
+    let spawned = std::thread::Builder::new()
+        .name("terminal input".to_owned())
+        .spawn(move || read_inputs(input_sender))
+        .and_then(|_| {
+            std::thread::Builder::new()
+                .name("dashboard".to_owned())
+                .spawn(dashboard)
+        });
+    if let Err(error) = spawned {
+        restore_terminal(&name);
+        return Err(error);
+    }
+    Ok(Running { stop, finished })
 }
 
 #[cfg(test)]
