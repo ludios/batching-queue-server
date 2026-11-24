@@ -315,7 +315,7 @@ F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
    - number of known client IPs, and how many of them are blocked
 2. **Clients table**: one header row, then one row per client.
 3. **Events pane**: the most recent events, newest at the bottom, as many as fit.
-4. **Key bar** (1 row).
+4. **Key bar** (1 row). As in `htop`, the key names are in the terminal's colors and the rest of the row is black on cyan.
 
 In the status line, values are bold and the words between them are dark gray, so that the values stand out; a count of blocked IPs above 0 is red. While the server is paused, the status line starts with `PAUSED` in a standout style (for example reverse video), and the key bar shows `F5 Resume` in place of `F5 Pause`.
 

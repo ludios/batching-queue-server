@@ -638,7 +638,12 @@ impl Dashboard {
             (KeyCode::F(9), "F9", "Block"),
             (KeyCode::F(10), "F10", "Quit"),
         ];
-        let key_style = Style::new().add_modifier(Modifier::BOLD);
+        // As in htop: the key names in the terminal's colors, the rest of the row black on cyan
+        buf.set_style(
+            Rect::new(area.x, y, area.width, 1),
+            Style::new().fg(Color::Black).bg(Color::Cyan),
+        );
+        let key_style = Style::new().fg(Color::Reset).bg(Color::Reset);
         let mut x = area.x;
         for (key, key_name, label) in labels {
             let start = x;
@@ -1235,6 +1240,13 @@ mod tests {
         assert_eq!(buffer[(x, 2)].bg, Color::Cyan);
         assert_eq!(buffer[(x + 5, 2)].bg, Color::Cyan);
         assert_eq!(buffer[(x + 6, 2)].bg, Color::Green);
+
+        // The key bar is cyan, but for its key names
+        let (x, _) = find(&screen[12..], "F2 UA");
+        assert_eq!(buffer[(x, 12)].bg, Color::Reset);
+        assert_eq!(buffer[(x + 2, 12)].bg, Color::Cyan);
+        assert_eq!(buffer[(x + 3, 12)].bg, Color::Cyan);
+        assert_eq!(buffer[(99, 12)].bg, Color::Cyan);
     }
 
     #[test]
