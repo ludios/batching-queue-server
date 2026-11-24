@@ -364,7 +364,7 @@ While the dashboard runs, set the title of the terminal window, so that a list o
 | The server is paused | `PAUSED 12.5% items.txt` |
 | Otherwise | `12.5% items.txt` |
 
-The percent is the one from the status line. Write the title only when its text changes. For an item file without lines the percent is `-`, as in the status line, so the title is `- items.txt`. At every exit that restores the terminal (a clean exit, a failure while running, or a panic), set the title to `stopped items.txt`.
+The percent is the one from the status line. Write the title only when its text changes. For an item file without lines the percent is `-`, as in the status line, so with cycling on the title is `- items.txt`. (With cycling off, the position 0 equals the total 0, so the first row of the table applies and the title is `DONE items.txt`.) At every exit that restores the terminal (a clean exit, a failure while running, or a panic), set the title to `stopped items.txt`.
 
 The item file name comes from the command line and is written to the terminal, in the title and in the status line. Clean it first in the same way as a `User-Agent` value.
 
@@ -466,7 +466,7 @@ Required, at minimum:
 - With more than 8 new clients at once, at most 8 lookups run at the same time, and all of them finish eventually.
 - A lookup that never answers is given up 5 seconds after it started running, and the client then counts as looked up without a name. A ninth lookup that waited longer than 5 seconds for its turn still runs and can still get its name.
 - An answer with a `CNAME` record before the `PTR` record gives the `PTR` target. A lookup function that reports "resolver not available" makes every client count as looked up without a name, and the server keeps serving.
-- A name with a final `.`, with control characters, or longer than 100 `char`s is stored without the `.`, cleaned, and truncated.
+- A name with a final `.`, with control characters, or longer than 255 `char`s is stored without the `.`, cleaned, and truncated.
 
 **State file** (every test uses an item file in its own fresh temporary directory, because the default state file is written next to the item file)
 
