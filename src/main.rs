@@ -251,9 +251,20 @@ fn start_dashboard(
     tui::start(server.shared.clone(), config, quit, fatal).context("cannot start the dashboard")
 }
 
+/// Whether stdin and stdout are terminals and this process is in the foreground of the terminal
+/// at stdin. (The kernel stops a background process that switches its terminal to the
+/// dashboard.)
+fn can_show_dashboard() -> bool {
+    let stdin = std::io::stdin();
+    if !stdin.is_terminal() || !std::io::stdout().is_terminal() {
+        return false;
+    }
+    rustix::termios::tcgetpgrp(&stdin).is_ok_and(|group| group == rustix::process::getpgrp())
+}
+
 fn main() {
     let args = Args::parse();
-    let show_dashboard = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+    let show_dashboard = can_show_dashboard();
     // With the dashboard, nothing else may write to the terminal
     if !show_dashboard {
         tracing_subscriber::fmt()

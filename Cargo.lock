@@ -142,6 +142,7 @@ dependencies = [
  "jiff",
  "proptest",
  "ratatui",
+ "rustix",
  "serde",
  "serde_json",
  "socket2",
