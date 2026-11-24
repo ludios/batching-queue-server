@@ -30,7 +30,10 @@ fn spawn(item_file: &Path) -> Child {
 fn startup_line(stderr: &mut BufReader<ChildStderr>) -> String {
     let mut line = String::new();
     stderr.read_line(&mut line).unwrap();
-    assert!(line.contains("the state file"), "the server did not start: {line:?}");
+    assert!(
+        line.contains("the state file"),
+        "the server did not start: {line:?}"
+    );
     line
 }
 
@@ -54,7 +57,10 @@ fn a_killed_server_leaves_no_lock_behind() {
     let second = spawn(&item_file).wait_with_output().unwrap();
     assert_eq!(second.status.code(), Some(1));
     let message = String::from_utf8_lossy(&second.stderr);
-    assert!(message.contains("a running server is using the state file"), "{message}");
+    assert!(
+        message.contains("a running server is using the state file"),
+        "{message}"
+    );
 
     first.kill().unwrap();
     first.wait().unwrap();
