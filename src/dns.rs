@@ -22,6 +22,9 @@ const TIMEOUT: Duration = Duration::from_secs(5);
 /// cost a client its name for the whole run.
 const TRY_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// The most `char`s of a name that are kept: its last ones, because the domain is at the end.
+const MAX_NAME_CHARS: usize = 255;
+
 /// Asks the DNS for the `PTR` records of an IP address.
 ///
 /// Returns the records of the answer in their order, or the reason why there isn't an answer.
@@ -29,9 +32,9 @@ pub type LookUp =
     Arc<dyn Fn(IpAddr) -> Pin<Box<dyn Future<Output = Result<Vec<Record>>> + Send>> + Send + Sync>;
 
 /// Returns the target name of the first `PTR` record in `answer` (skipping records of every
-/// other type), in ASCII form, without its final `.`, cleaned and cut by
-/// `state::clean_host_name`; or `Host::NoName` if `answer` doesn't have a `PTR` record or its
-/// name is empty.
+/// other type), in ASCII form, without its final `.`, cleaned by `state::clean_for_terminal`,
+/// and cut to its last `MAX_NAME_CHARS` `char`s; or `Host::NoName` if `answer` doesn't have a
+/// `PTR` record or its name is empty.
 fn host_from_answer(answer: &[Record]) -> Host {
     let name = answer.iter().find_map(|record| match &record.data {
         RData::PTR(ptr) => Some(&ptr.0),
@@ -45,9 +48,18 @@ fn host_from_answer(answer: &[Record]) -> Host {
     // in three octal digits (`\033`). So each `char` takes one screen column.
     let ascii = name.to_ascii();
     let ascii = ascii.strip_suffix('.').unwrap_or(&ascii);
-    // The cleaning doesn't change the ASCII form, but keeps the terminal safe whatever that
-    // form becomes
-    state::clean_host_name(ascii).map_or(Host::NoName, Host::Name)
+    // Doesn't change the ASCII form, but keeps the terminal safe whatever that form becomes
+    let cleaned = state::clean_for_terminal(ascii.as_bytes(), usize::MAX);
+    let length = cleaned.chars().count();
+    let name: String = cleaned
+        .chars()
+        .skip(length.saturating_sub(MAX_NAME_CHARS))
+        .collect();
+    if name.is_empty() {
+        Host::NoName
+    } else {
+        Host::Name(name)
+    }
 }
 
 /// Looks up the reverse DNS names of client IP addresses in the background, at most

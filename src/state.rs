@@ -28,10 +28,6 @@ const VERSION: u64 = 1;
 /// The most `char`s of a `User-Agent` value that are kept.
 const MAX_USER_AGENT_CHARS: usize = 200;
 
-/// The most `char`s of a host name that are kept: its last ones, because the domain is at the
-/// end.
-const MAX_HOST_CHARS: usize = 255;
-
 /// The most events that are kept.
 const MAX_EVENTS: usize = 1000;
 
@@ -55,24 +51,6 @@ pub fn clean_for_terminal(bytes: &[u8], max_chars: usize) -> String {
         .take(max_chars)
         .map(|c| if c.is_control() { '?' } else { c })
         .collect()
-}
-
-/// Makes a reverse DNS name safe to draw on a terminal: cleans `name` by `clean_for_terminal`
-/// and cuts it to its last `MAX_HOST_CHARS` `char`s.
-///
-/// Returns None if `name` is empty.
-pub fn clean_host_name(name: &str) -> Option<String> {
-    if name.is_empty() {
-        return None;
-    }
-    let cleaned = clean_for_terminal(name.as_bytes(), usize::MAX);
-    let length = cleaned.chars().count();
-    Some(
-        cleaned
-            .chars()
-            .skip(length.saturating_sub(MAX_HOST_CHARS))
-            .collect(),
-    )
 }
 
 /// What is known about one client IP address.
@@ -122,14 +100,17 @@ fn serialize_host<S: Serializer>(host: &Host, serializer: S) -> Result<S::Ok, S:
     }
 }
 
-/// Deserializes the `host` of a client in a state file: a name, cleaned as a live one is, or
-/// null. An empty name counts as null.
+/// Deserializes the `host` of a client in a state file, which is a string or null.
+///
+/// Returns `Host::Name` for a string in the form of a found name (see `Host::Name`), and
+/// `Host::NotLookedUp` for null or any other string, so that the client is looked up again.
 fn deserialize_host<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Host, D::Error> {
-    let name = Option::<String>::deserialize(deserializer)?;
-    Ok(name
-        .as_deref()
-        .and_then(clean_host_name)
-        .map_or(Host::NotLookedUp, Host::Name))
+    Ok(match Option::<String>::deserialize(deserializer)? {
+        Some(name) if !name.is_empty() && name.bytes().all(|b| b.is_ascii_graphic()) => {
+            Host::Name(name)
+        }
+        _ => Host::NotLookedUp,
+    })
 }
 
 /// Deserializes the `clients` of a state file, with each IP address in its canonical form (see
@@ -176,8 +157,9 @@ pub enum Host {
     /// Looked up in this run, without a name: no `PTR` record, an empty name, an error, or
     /// given up.
     NoName,
-    /// This name, cleaned by `clean_host_name`, found in this run or loaded from the state
-    /// file.
+    /// This name, found in this run or loaded from the state file. It has one or more
+    /// characters, each of them printable ASCII other than space, so that each takes one screen
+    /// column: a found name is in hickory's ASCII form (see `dns`).
     Name(String),
 }
 
@@ -1130,35 +1112,68 @@ mod tests {
     #[test]
     fn loaded_clients_are_treated_like_live_ones() {
         let (_dir, shared) = setup(3);
-        // `rest` ends the fields of the client
-        let client = |user_agent: &str, rest: &str| {
+        let client = |user_agent: &str| {
             format!(
                 r#"{{"blocked": true, "items": 1, "requests": 2, "first_seen": "2026-11-24T12:00:00Z",
-                    "last_seen": "2026-11-24T12:00:00Z", "user_agent": {user_agent}{rest}}}"#
+                    "last_seen": "2026-11-24T12:00:00Z", "user_agent": {user_agent}}}"#
             )
         };
         let contents = format!(
-            r#"{{"version": 1, "position": 0, "wraps": 0, "clients": {{"::ffff:203.0.113.7": {}, "::1": {}, "::2": {}}}}}"#,
-            client(r#""\u001b[2Jx""#, r#", "host": "\u001b[2Jx.example.com""#),
-            client("null", ""),
-            client("null", r#", "host": """#),
+            r#"{{"version": 1, "position": 0, "wraps": 0, "clients": {{"::ffff:203.0.113.7": {}, "::1": {}}}}}"#,
+            client(r#""\u001b[2Jx""#),
+            client("null"),
         );
         fs::write(shared.path(), contents).unwrap();
         let loaded = load(shared.path()).unwrap().unwrap();
-        let ipv6 = |text: &str| text.parse::<IpAddr>().unwrap();
         assert_eq!(
             loaded.clients.keys().collect::<Vec<_>>(),
-            [&IP, &ipv6("::1"), &ipv6("::2")]
+            [&IP, &"::1".parse::<IpAddr>().unwrap()]
         );
         assert_eq!(loaded.clients[&IP].user_agent.as_deref(), Some("?[2Jx"));
         assert!(loaded.clients[&IP].blocked);
-        assert_eq!(
-            loaded.clients[&IP].host,
-            Host::Name("?[2Jx.example.com".to_owned())
+    }
+
+    #[test]
+    fn a_loaded_host_is_a_name_only_in_the_form_of_a_found_one() {
+        let (_dir, shared) = setup(3);
+        // Each `host` field, and whether it is loaded as a name
+        let hosts = [
+            (r#", "host": "a-1.example.com""#, true),
+            (r#", "host": "\\033\\[2J.example.com""#, true),
+            // As in a state file of an earlier build
+            ("", false),
+            (r#", "host": null"#, false),
+            (r#", "host": """#, false),
+            (r#", "host": "a b.example.com""#, false),
+            (r#", "host": "\u001b[2J.example.com""#, false),
+            (r#", "host": "é.example.com""#, false),
+        ];
+        let ip = |n: usize| IpAddr::from([203, 0, 113, n as u8]);
+        let clients: Vec<String> = hosts
+            .iter()
+            .enumerate()
+            .map(|(n, (host, _))| {
+                format!(
+                    r#""{}": {{"blocked": false, "items": 1, "requests": 1, "first_seen": "2026-11-24T12:00:00Z",
+                        "last_seen": "2026-11-24T12:00:00Z", "user_agent": null{host}}}"#,
+                    ip(n)
+                )
+            })
+            .collect();
+        let contents = format!(
+            r#"{{"version": 1, "position": 0, "wraps": 0, "clients": {{{}}}}}"#,
+            clients.join(", ")
         );
-        // Without a name, as in a state file of an earlier build, or with an empty one
-        assert_eq!(loaded.clients[&ipv6("::1")].host, Host::NotLookedUp);
-        assert_eq!(loaded.clients[&ipv6("::2")].host, Host::NotLookedUp);
+        fs::write(shared.path(), contents).unwrap();
+        let loaded = load(shared.path()).unwrap().unwrap();
+        for (n, (host, is_name)) in hosts.iter().enumerate() {
+            let loaded = &loaded.clients[&ip(n)].host;
+            assert_eq!(
+                matches!(loaded, Host::Name(_)),
+                *is_name,
+                "{host}: {loaded:?}"
+            );
+        }
     }
 
     /// Writes `contents` to the state file and returns the message of the error from loading it.
