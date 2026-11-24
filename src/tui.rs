@@ -1207,8 +1207,9 @@ mod tests {
                 outcome,
             );
         }
+        let screen = test.draw();
         assert_eq!(
-            test.draw(),
+            screen,
             [
                 "items.txt :31417  0/10 0.0%  ETA 0s  1,000 items/min  2 req/min  wrap 0  3 IPs, 1 blocked",
                 "",
@@ -1228,7 +1229,6 @@ mod tests {
 
         // The status line's values are bold and the words between them dimmed; a count of
         // blocked IPs above 0 is red
-        let screen = test.draw();
         let buffer = test.terminal.backend().buffer();
         let (x, _) = find(&screen[..1], "1,000 items/min");
         assert!(buffer[(x, 0)].modifier.contains(Modifier::BOLD));
