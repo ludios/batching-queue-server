@@ -18,6 +18,7 @@ The operator will read and maintain this code. Prefer the plainest design that m
 
 - The client's address is the TCP peer address. Do not read `X-Forwarded-For` or any other header for it.
 - A blocked IP receives `403` with an empty body, after a 1 second delay.
+- Lines are handed out at one configurable path only (`--path`, for example `/secretword`). A request to any other path receives `403`.
 - No claim tracking, no "done" reports, no re-queueing of items. Handing out a line is the whole protocol.
 - No rate limiting. No automatic blocking. No client nicknames. No block list shared between instances.
 - The dashboard is a TUI inside the server process. No web UI.
@@ -37,6 +38,7 @@ batching-queue-server [OPTIONS] ITEM_FILE
 | `--port PORT` | `31417` | TCP port to listen on. |
 | `--no-cycle` | cycling is on | Turn cycling off. With cycling on, the server starts again at the first line after the last line was handed out. With cycling off, it stops handing out lines at the end of the file. |
 | `--max-batch N` | `10000` | Upper limit on the number of lines in one response. Must be at least 1. |
+| `--path PATH` | `/` | The only request path at which lines are handed out; every other path gets `403`. A hard-to-guess value such as `/secretword` keeps strangers out. It must start with `/` and consist of printable ASCII characters other than space, `?`, and `#`; any other value is an argument error. |
 
 Use `clap` (derive). Every setting is an option; no environment variable is read.
 
@@ -97,7 +99,7 @@ For each request, the first matching row applies:
 | Condition | Status | Headers | Body | Delay before responding | Lines consumed |
 |---|---|---|---|---|---|
 | The client IP is blocked | `403` | | empty | 1 second | none |
-| The path is not exactly `/` | `404` | | empty | none | none |
+| The path is not exactly the `--path` value | `403` | | empty | 1 second | none |
 | The method is not `GET` | `405` | `Allow: GET` | empty | none | none |
 | The `max` query parameter is invalid | `400` | `Content-Type: text/plain` | one line saying what is wrong | none | none |
 | The batch has at least one line | `200` | `Content-Type: text/plain` | each line followed by `\n` | none | the batch |
@@ -105,8 +107,10 @@ For each request, the first matching row applies:
 
 - `max` is optional; when absent it is 1. It is valid when the parameter appears at most once and its URL-decoded value consists of one or more ASCII digits `0` to `9` that form a number from 1 to 2^64 − 1. A valid `max` greater than the `--max-batch` value is lowered to that value (the client asked for "at most `max`" lines, so fewer is within the contract). Everything else is invalid: `0`, a leading `+` or `-`, `1.5`, `1e3`, `0x10`, an empty value, a number above 2^64 − 1, a repeated parameter.
 - Other query parameters are ignored.
+- The path of the request is compared with the `--path` value byte for byte, as received: no URL-decoding, no special treatment of a trailing `/`, no case folding. The query string is not part of the path.
+- A wrong path gets exactly the reply that a blocked client gets. A stranger then cannot tell the two apart, and the delay slows down guessing. Do not show or log the `--path` value or the paths of requests.
 - A request is counted, and its client record created, when the handler receives it. Requests that the HTTP library rejects before the handler runs (malformed requests) are not counted.
-- `HEAD /` from a client that is not blocked must get `405` and must not consume lines. Verified on docs.rs for axum 0.8.9: a route registered with `routing::get` is also called for `HEAD` requests. Register the handler so that this cannot happen, and test it.
+- `HEAD` on the right path from a client that is not blocked must get `405` and must not consume lines. Verified on docs.rs for axum 0.8.9: a route registered with `routing::get` is also called for `HEAD` requests. Register the handler so that this cannot happen, and test it.
 - The `Content-Type` value is exactly `text/plain`, with no `charset`, as in the Node version.
 - The 1 second delay slows down clients that poll an empty queue and clients that keep hammering while blocked. Waiting requests must not delay other requests.
 - A block or unblock applies to every request whose handler starts after it. Requests already waiting out their delay finish as they started.
@@ -118,14 +122,14 @@ These were observed by running the Node version:
 - `GET /?max=1.5` and `GET /?max=-1` returned every remaining line of the file in one response. Now `400`.
 - `max=` and `max` without a value served 1 line. `max=1e3`, `max=0x10`, `max=+5`, and `max=2.0` served 1000, 16, 5, and 2 lines. `max=0`, `max=abc`, and a repeated `max` got an empty `200` after 1 second. All of these are now `400`.
 - There was no upper limit on `max`. Now the `--max-batch` value.
-- A `GET` to any path, for example `/favicon.ico`, consumed a line. Now `404`.
+- A `GET` to any path, for example `/favicon.ico`, consumed a line. Now only the `--path` value (by default `/`) hands out lines, and every other path gets `403`.
 - A request with a method other than `GET` never received a response. Now `405`.
 - Lines that are not valid UTF-8 were sent with each invalid sequence replaced by U+FFFD. Now every line is sent unchanged.
 - The position file was rewritten in place on every `GET`. An empty position file silently restarted the queue at line 0, and a damaged one made the Node version write `NaN` into it. Now the position is saved in the state file every 5 seconds, and a damaged state file is a startup error.
 - The position file was the second positional argument. Now there is a state file, given with `--state-file` or found next to the item file.
 - The port and the cycling setting came from the environment variables `PORT` and `CYCLE`, and every `CYCLE` value except `false` meant cycling on. Now they are the options `--port` and `--no-cycle`.
 
-For valid requests from clients that are not blocked (`GET /` with `max` absent or a number from 1 to the `--max-batch` value), served from an item file that is valid UTF-8, the response bodies must be byte-identical to the Node version's. After the same sequence of such requests, the position must equal the number in the Node version's position file.
+For valid requests from clients that are not blocked (`GET` on the `--path` value, with `max` absent or a number from 1 to the `--max-batch` value), served from an item file that is valid UTF-8, the response bodies must be byte-identical to the Node version's. After the same sequence of such requests, the position must equal the number in the Node version's position file.
 
 ## Client tracking
 
@@ -152,7 +156,7 @@ Keep the most recent 1000 events in memory. One event per request:
 
 - time
 - client IP
-- outcome: the number of lines handed out (possibly 0), or `blocked`, or `rejected` together with the status code (`400`, `404`, `405`)
+- outcome: the number of lines handed out (possibly 0), or `blocked`, or `wrong path`, or `rejected` together with the status code (`400` or `405`)
 
 ### Rates
 
@@ -240,7 +244,7 @@ items.txt :31417  1,234,567/9,876,543 12.5%  wrap 3  412 items/min  38 req/min  
 [block]    203.0.113.7    12,400     3d    2s     124
 [unblock]  198.51.100.9      300     1h    0s   1,215
 [block]    2001:db8::17        0     5m    5m       1
-11:56:10 2001:db8::17  rejected 404
+11:56:10 2001:db8::17  wrong path
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
 F2 UA  F6 Sort  F7 Invert  F9 Block  F10 Quit
@@ -286,7 +290,7 @@ A mouse click is resolved against what the most recently drawn frame showed at t
 
 ### Events pane
 
-Each row: local time as `HH:MM:SS`, client IP, outcome. The outcome is the number of lines handed out, or `blocked`, or `rejected` followed by the status code.
+Each row: local time as `HH:MM:SS`, client IP, outcome. The outcome is the number of lines handed out, or `blocked`, or `wrong path`, or `rejected` followed by the status code.
 
 ### Keys and mouse
 
@@ -359,7 +363,8 @@ Required, at minimum:
 
 **HTTP** (drive the router directly and supply the peer address yourself, so that tests can act as several client IPs; use tokio's paused time so that the 1 second delays cost nothing)
 
-- Each row of the HTTP contract table, including that the non-`200` rows and `HEAD /` consume no lines.
+- Each row of the HTTP contract table, including that the non-`200` rows and `HEAD` consume no lines.
+- With `--path /secret`: `/secret` and `/secret?max=2` are served; `/`, `/secret/`, `/SECRET`, and `/%73ecret` get `403` after 1 second and consume no lines. A `--path` value without a leading `/`, or containing `?`, is an argument error.
 - Each kind of invalid `max` listed above, and lowering to the `--max-batch` value.
 - A blocked IP gets `403` while another IP is served normally; unblocking restores service.
 - Many concurrent requests: every line of the file is handed out exactly once.
