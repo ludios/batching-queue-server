@@ -356,6 +356,10 @@ impl State {
             clients.keys().all(|ip| *ip == ip.to_canonical()),
             "every IP address must be canonical"
         );
+        assert!(
+            clients.values().all(|client| client.host != Host::NoName),
+            "no client has been looked up in this run yet"
+        );
         assert_ne!(view.sort_column, Column::Ua, "UA cannot be the sort column");
         State {
             queue,
@@ -527,6 +531,7 @@ impl State {
     ///
     /// Returns whether it has been marked now, so that the caller looks it up.
     pub fn mark_for_lookup(&mut self, ip: IpAddr) -> bool {
+        assert_eq!(ip, ip.to_canonical(), "the IP address must be canonical");
         let client = self.clients.get(&ip).expect("the client has a record");
         if let Host::Name(_) = client.host {
             return false;
@@ -536,8 +541,8 @@ impl State {
 
     /// Stores `host`, which the reverse DNS lookup of the client at `ip` found. That client must
     /// have been marked for a lookup (see `mark_for_lookup`), and its lookup must not have
-    /// finished before. A name is saved at the next periodic save. After `stop`, does nothing,
-    /// because the final save may have been taken.
+    /// finished before. A name is saved at the next save. After `stop`, does nothing, because
+    /// the final save may have been taken.
     pub fn set_host(&mut self, ip: IpAddr, host: Host) {
         assert_ne!(
             host,
@@ -998,6 +1003,22 @@ mod tests {
         assert!(!state.clients[&IP].blocked);
         assert_eq!(state.view, View::default());
         assert_eq!(state.clients[&IP].host, Host::NotLookedUp);
+    }
+
+    #[test]
+    fn only_a_found_name_needs_saving() {
+        let (_dir, shared) = setup(3);
+        let mut state = shared.state.lock().unwrap();
+        let other = IpAddr::from([203, 0, 113, 8]);
+        state.record_request(IP, time("2026-11-24T12:00:00Z"), None);
+        state.record_request(other, time("2026-11-24T12:00:00Z"), None);
+        assert!(state.mark_for_lookup(IP));
+        assert!(state.mark_for_lookup(other));
+        state.snapshot();
+        state.set_host(other, Host::NoName);
+        assert!(!state.dirty);
+        state.set_host(IP, Host::Name("client.example.com".to_owned()));
+        assert!(state.dirty);
     }
 
     #[test]
