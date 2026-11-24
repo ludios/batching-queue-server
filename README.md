@@ -114,9 +114,9 @@ To change the state, stop the server, edit the state file, and start the server 
 The server locks a file whose path is the state file's path with `.lock` appended (`items.txt.bqs.json.lock`), so that a second server with the same state file path refuses to start.
 
 - The lock file is permanent and empty.
-- The lock is never stale: the operating system releases it when the server's process ends, also by a crash or a `kill -9`. So the error that the state file is in use always means that a running process holds the lock.
+- The lock is never stale: the operating system releases it when the server's process ends, however it ends, also after a crash or a `kill -9`. So the error that the state file is in use always means that a running process holds the lock.
 - Do not delete the lock file while a server runs: a second server could then start, and the two would overwrite each other's state file.
-- Two servers that reach one state file by different paths (through a symlink or a hard link) are not detected.
+- A symlink or a hard link to the state file under another name gets a different lock file, so two servers that use the two names are not detected.
 - The lock is reliable only on a local filesystem.
 
 ## The dashboard
@@ -136,11 +136,11 @@ F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
 From top to bottom:
 
 1. The status line: the item file name, the port, the position and the number of lines in the file, the percent done, the estimated time until the end of the pass at the rate of the last minute (or `DONE` when cycling is off and every line has been handed out), the lines handed out and the requests in the last minute, the wrap counter (with `--cycle` only), and the number of client IP addresses and how many of them are blocked. While the server is paused, the line starts with `PAUSED`.
-2. The clients table, one row per client IP address. `FIRST` and `LAST` are the times since the first and the most recent request. `HOST` is the reverse DNS name (see "Reverse DNS names"). `UA` is the most recent `User-Agent`; this column is hidden unless the operator has chosen to show it. Rows of blocked IP addresses are drawn in red.
+2. The clients table, one row per client IP address. `FIRST` and `LAST` are the times since the first and the most recent request. `HOST` is the reverse DNS name (see "Reverse DNS names"). `UA` is the most recent `User-Agent`; this column is hidden unless the operator has chosen to show it. Rows of blocked IP addresses are drawn in red. The selected row is black on cyan, or black on red if its client is blocked.
 3. The events pane: the most recent requests, newest at the bottom, each with its time, its client, and its outcome (the number of lines handed out, `blocked`, `wrong path`, `paused`, or `rejected` with the status code).
 4. The key bar.
 
-The terminal window's title shows the state too: `12.5% items.txt`, `PAUSED 12.5% items.txt`, `DONE items.txt`, and `stopped items.txt` after a clean exit (see "Exiting").
+The terminal window's title shows the state too: `12.5% items.txt`, `PAUSED 12.5% items.txt`, `DONE items.txt`, and `stopped items.txt` after the server has exited (but not after a `kill -9`).
 
 | Key or mouse | Action |
 |---|---|
@@ -167,13 +167,13 @@ Quitting the dashboard stops the server. The sort column, the sort direction, an
 
 The `HOST` column shows the reverse DNS name (the `PTR` record) of each client IP address, as a hint about who the client is.
 
-- A client without a name is looked up in the background at its first request in each run of the server, and not again in that run. A lookup is given up after 5 seconds.
+- A client without a name is looked up in the background at its first request in each run of the server, and not again in that run. At most 8 lookups run at the same time, and each is given up 5 seconds after it began running.
 - A name that a lookup found is saved in the state file. So the dashboard shows it from the start of the next run, and the client is never looked up again. To have a saved name looked up again, stop the server, set the client's `host` to `null` in the state file, and start the server again.
 - An empty `HOST` cell means that the client doesn't have a name and that its lookup has not started or not finished yet in this run; `-` means that its lookup in this run didn't find a name, failed, or was given up.
 - The `HOST` column is as wide as its longest name, so a long name leaves less room for `UA`, or none. A name longer than the rest of the row is shown as `…` followed by its end, because the domain is at the end.
 - The names are not verified. Nothing checks that a name resolves back to the IP address, so the owner of an address can publish any name for it.
 - The lookups send the client IP addresses to the DNS resolver that the system is configured with (`/etc/resolv.conf`), also while the `HOST` column is hidden.
-- Names are shown in ASCII: an internationalized label as `xn--…`, and an unusual character escaped (for example `\033` for ESC).
+- Names are shown in ASCII: an internationalized label as `xn--…`, and an unusual character escaped with `\` (for example `\[` for `[`, and `\033`, in octal, for ESC).
 - Without a dashboard, the server doesn't do any lookups.
 
 ## Exiting
