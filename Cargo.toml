@@ -1,0 +1,37 @@
+[package]
+name = "batching-queue-server"
+version = "0.1.0"
+edition = "2024"
+description = "Hands out the lines of a text file to HTTP clients, a batch per request"
+publish = false
+
+[dependencies]
+anyhow = "1"
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+clap = { version = "4", features = ["derive"] }
+form_urlencoded = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+socket2 = "0.6"
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tracing = "0.1"
+# No default features: they include ANSI colors, which would end up in a log file
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+
+[dev-dependencies]
+proptest = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["io-util", "test-util"] }
+tower = { version = "0.5", features = ["util"] }
+
+[profile.dev]
+debug = false
+panic = "abort"
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
