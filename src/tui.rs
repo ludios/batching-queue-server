@@ -966,7 +966,7 @@ pub fn start(
 mod tests {
     use super::*;
     use crate::queue::Queue;
-    use crate::state::Outcome;
+    use crate::state::{Outcome, State};
     use proptest::prelude::*;
     use ratatui::backend::TestBackend;
     use std::collections::BTreeMap;
