@@ -127,8 +127,8 @@ fn print_line(line: &str) {
 
 /// Does the startup checks, loads the state, binds the port, and saves the state once.
 ///
-/// `look_up_hosts` says whether to look up the reverse DNS name of each client, which only a
-/// dashboard shows.
+/// `look_up_hosts` says whether to look up the reverse DNS name of each client without a name,
+/// which only a dashboard shows.
 fn start(args: &Args, look_up_hosts: bool) -> Result<Server> {
     let state_file = args.state_file();
     // The server writes these files (the temporary one at every save)
@@ -152,7 +152,7 @@ fn start(args: &Args, look_up_hosts: bool) -> Result<Server> {
         dns::Resolver::system().unwrap_or_else(|error| {
             print_line(&format!(
                 "cannot set up the DNS resolver, so the dashboard won't show a host name for \
-                 any client: {error:#}"
+                 any client that doesn't have one saved: {error:#}"
             ));
             dns::Resolver::unavailable()
         })

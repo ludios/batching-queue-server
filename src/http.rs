@@ -32,8 +32,8 @@ pub struct Config {
 struct App {
     shared: Arc<Shared>,
     config: Arc<Config>,
-    /// Looks up the reverse DNS name of each client at its first request in this run of the
-    /// server. None without a dashboard, which is the only place that shows the names.
+    /// Looks up the reverse DNS name of each client without a name at its first request in this
+    /// run of the server. None without a dashboard, which is the only place that shows the names.
     resolver: Option<Resolver>,
     /// Where the handler sends an error that must stop the server.
     fatal: UnboundedSender<anyhow::Error>,
@@ -211,9 +211,9 @@ async fn handle(
 /// `Router::into_make_service_with_connect_info`).
 ///
 /// `shared` is the state of the server, and `config` its settings. `resolver`, if given, looks
-/// up the reverse DNS name of each client at its first request in this run. `fatal` is where
-/// the handler sends an error that must stop the server: a failed read of the item file. The
-/// handler then stops the state, and the request gets no response.
+/// up the reverse DNS name of each client without a name at its first request in this run.
+/// `fatal` is where the handler sends an error that must stop the server: a failed read of the
+/// item file. The handler then stops the state, and the request gets no response.
 pub fn router(
     shared: Arc<Shared>,
     config: Config,

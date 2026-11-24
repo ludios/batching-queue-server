@@ -152,6 +152,7 @@ Per client:
 | `first_seen` | Time of the first request from this IP. |
 | `last_seen` | Time of the most recent request from this IP. |
 | `user_agent` | The `User-Agent` header of the most recent request that had one; absent if none ever had one. |
+| `host` | The reverse DNS name that a lookup found (see "Reverse DNS names"); absent if no lookup has found one. |
 
 A client record is created by the first request of any kind from that IP, so that scanners appear in the dashboard and can be blocked. Records are never removed.
 
@@ -168,7 +169,7 @@ The dashboard shows the reverse DNS name (the PTR record) of each client IP, as 
 - If the resolver cannot be set up (for example because `/etc/resolv.conf` is missing), that is not an error: the server runs, and every client that would be looked up counts as looked up without a name.
 - The result is the target name of the first `PTR` record in the answer, in hickory's ASCII form (`Name::to_ascii`), without its final `.`. Skip records of every other type; an answer can contain a `CNAME` record before the `PTR` record. A result that is empty counts as no name. The ASCII form keeps internationalized labels as `xn--…`, and escapes unusual characters in the style of a DNS zone file: as `\` and the character (`\[`), or as `\` and its byte in three octal digits (`\033` for ESC). So each `char` of it takes one screen column. The owner of the reverse zone controls this name, and it is drawn on the operator's terminal, so also replace each control character in it with `?`, as in a `User-Agent` value; the ASCII form doesn't have any, but this keeps the terminal safe whatever that form becomes. Don't cut it to its first 200 `char`s, as a `User-Agent` value is cut: if it is longer than 255 `char`s, keep its last 255, because the domain is at the end.
 - So a client is in one of three states: without a name and not looked up yet in this run (or its lookup has not finished); with a name, found in this run or loaded from the state file; looked up in this run, without a name (no `PTR` record, an error, or given up).
-- Save a found name in the client's record in the state file (see "State file"), so that the dashboard shows it from the start of the next run without another lookup. Don't save that a lookup found no name: the cause may have been a failure that doesn't last, so the client is looked up again in the next run.
+- Save a found name in the client's record in the state file (see "State file"), so that the dashboard shows it from the start of the next run without another lookup. Don't save that a lookup didn't find a name: the cause may have been a failure that doesn't last, so the client is looked up again in the next run.
 - Without a dashboard, do no lookups.
 - With a dashboard, lookups run whether or not the `HOST` column is shown.
 - The name is not verified: nothing checks that the name resolves back to the IP, so the owner of an address can publish any name. The README must say this.
@@ -263,7 +264,7 @@ There is no automatic conversion of a Node position file. The README explains ho
 - After that, save every 30 seconds if anything in the saved data changed since the last save; immediately when a block or unblock happens; immediately at each wrap; and at every clean exit (see "Exiting"). A changed view setting and a found name are changes like any other: they wait for the next of these saves. Measure the 30 seconds with tokio's clock, not with the wall clock, which may jump.
 - Every save is one consistent snapshot: the position, the wrap counter, the view settings, and every client record are from the same instant. Take the snapshot while holding the state mutex; write it to disk after releasing the mutex, so that a slow disk does not stall requests.
 - Two saves must never interleave, and an older snapshot must never overwrite a newer one.
-- Events and rates are not saved, and neither is a lookup that found no name.
+- Events and rates are not saved, and neither is a lookup that didn't find a name.
 
 The state is deliberately not saved on every request, because each save rewrites every client record. The consequence: after a crash, a kill, or a power loss, the server restarts from the last saved snapshot, which is normally at most about 30 seconds old, and the lines handed out after that snapshot are handed out a second time. This is accepted. No line is skipped because of it. A clean exit loses nothing.
 
@@ -336,7 +337,7 @@ Columns, left to right:
 | `FIRST` | age of `first_seen` | time | most recent first |
 | `LAST` | age of `last_seen` | time | most recent first |
 | `REQS` | `requests` | number | largest first |
-| `HOST` | the reverse DNS name; `-` when the lookup found none; empty while the client has not been looked up | the whole name (not the shortened form on screen), ignoring case, compared label by label from the last label to the first: `host.example.com` compares as the list `com`, `example`, `host`. So clients of one domain are adjacent. Compare lists, not joined strings, because `-` sorts before `.`. Clients without a name are equal to each other and come after all clients with a name, in both directions. | ascending |
+| `HOST` | the reverse DNS name; `-` when its lookup in this run didn't find a name; empty while the client doesn't have a name and its lookup in this run has not finished | the whole name (not the shortened form on screen), ignoring case, compared label by label from the last label to the first: `host.example.com` compares as the list `com`, `example`, `host`. So clients of one domain are adjacent. Compare lists, not joined strings, because `-` sorts before `.`. Clients without a name are equal to each other and come after all clients with a name, in both directions. | ascending |
 | `UA` | `user_agent`, or `-` | not sortable | |
 
 - At startup, the `HOST` column is shown unless the saved view settings say otherwise. It can be hidden and shown again with a key. Its width is that of the longest name in it, but at least that of its header with the sort arrow. If the rest of the screen width is less, the column gets only that rest, and the `UA` column gets nothing. A name longer than the column is shown as `…` followed by its end, because the domain is at the end.
@@ -462,10 +463,10 @@ Required, at minimum:
 
 **Reverse DNS** (with a lookup function supplied by the test, and tokio's paused time)
 
-- Many requests from one IP cause one lookup. A client loaded from the state file is not looked up at startup; it is looked up when it makes its first request in this run.
+- Many requests from one IP cause one lookup. A client loaded from the state file without a name is not looked up at startup; it is looked up when it makes its first request in this run.
 - A request is answered while the lookup for its client has not finished.
 - Without a dashboard, no lookup is made.
-- A found name is in the state file after the next save. A server started from that file shows the name before the client's first request and doesn't look the client up again. A client whose lookup found no name is saved with `"host": null`, and the next run looks it up again.
+- A found name is in the state file after the next save. A server started from that file shows the name before the client's first request and doesn't look the client up again. A client whose lookup didn't find a name is saved with `"host": null`, and the next run looks it up again.
 - A loaded `host` is a name only if it has the form of a found name; a client without `host`, or with an empty one, or with one that has a space, a control character, or a character outside ASCII, loads without a name.
 - With more than 8 new clients at once, at most 8 lookups run at the same time, and all of them finish eventually.
 - A lookup that never answers is given up 5 seconds after it started running, and the client then counts as looked up without a name. A ninth lookup that waited longer than 5 seconds for its turn still runs and can still get its name.
@@ -492,7 +493,7 @@ Required, at minimum:
 - The selection stays on the same IP when the rows re-sort.
 - A dashboard started from saved view settings shows that sort column, that direction, and those columns, with the rows in that order, also when the saved sort column is hidden; changing them changes what the next save writes.
 - `F2` shows and hides the `UA` column; `F3` shows and hides the `HOST` column.
-- Sorting by `HOST` puts `b.example.com` next to `a.example.com` and before `a.example.net`, keeps `a.foo-bar.com` and `b.foo-bar.com` adjacent although `c.foo.com` exists, and puts clients without a name last in both directions. The `HOST` cell is `-` for a client looked up without a name and empty for a client not looked up. A name of 72 characters is shown whole on a wide screen, with the `UA` column after it in every row; on a narrower screen it shows its end.
+- Sorting by `HOST` puts `b.example.com` next to `a.example.com` and before `a.example.net`, keeps `a.foo-bar.com` and `b.foo-bar.com` adjacent although `c.foo.com` exists, and puts clients without a name last in both directions. The `HOST` cell is `-` for a client looked up without a name and empty for a client without a name that has not been looked up. A name of 72 characters is shown whole on a wide screen, with the `UA` column after it in every row; on a narrower screen it shows its end.
 - `F5` pauses and resumes; while paused, the status line starts with `PAUSED` and the key bar shows `F5 Resume`.
 - The status line shows the number of client IPs and of blocked ones, and shows `DONE` when cycling is off and the position is at the end of the file.
 - The title text for each row of the "Terminal title" table, and for an item file without lines.
@@ -529,4 +530,4 @@ Do not build these; mention them in your final report if you see a strong reason
 - Filtering or searching the clients table.
 - Removing old client records.
 - Appending to the item file while the server runs.
-- Verifying a reverse DNS name with a forward lookup, and saving names across restarts.
+- Verifying a reverse DNS name with a forward lookup, and looking up a saved name again.
