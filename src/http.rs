@@ -3,7 +3,7 @@
 use crate::state::{self, Shared, State as ServerState};
 use anyhow::Result;
 use axum::Router;
-use axum::extract::{ConnectInfo, State};
+use axum::extract::{ConnectInfo, Request, State};
 use axum::http::header::{ALLOW, CONTENT_TYPE, USER_AGENT};
 use axum::http::request::Parts;
 use axum::http::{HeaderValue, Method, StatusCode};
@@ -185,13 +185,17 @@ fn decide(
 async fn handle(
     State(app): State<App>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    request: Parts,
+    request: Request,
 ) -> Response {
     let ip = peer.ip().to_canonical();
+    // Taken apart rather than extracted as `Parts`, which would copy the headers, and dropped
+    // before any delay
+    let (request, _) = request.into_parts();
     let decided = {
         let mut state = app.shared.state.lock().unwrap();
         decide(&mut state, &app.config, ip, state::now(), &request)
     };
+    drop(request);
     let reply = match decided {
         Ok(Some(reply)) => reply,
         Ok(None) => return std::future::pending().await,
