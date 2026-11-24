@@ -16,7 +16,8 @@ use ratatui::crossterm::terminal::{
 };
 use ratatui::crossterm::{cursor, execute};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::text::{Line, Span};
 use ratatui::{DefaultTerminal, Terminal, backend::CrosstermBackend};
 use std::cmp::Ordering;
 use std::io::{self, IsTerminal, stdout};
@@ -469,47 +470,65 @@ impl Dashboard {
         }
     }
 
-    /// Returns the status line for `snapshot`, without its `PAUSED` part.
-    fn status(&self, snapshot: &Snapshot) -> String {
-        let eta = if self.is_done(snapshot) {
-            "DONE".to_owned()
-        } else if snapshot.lines_per_minute == 0 {
-            "ETA -".to_owned()
+    /// Returns the status line for `snapshot`, without its `PAUSED` part. Its values are bold;
+    /// the words between them are dimmed.
+    fn status(&self, snapshot: &Snapshot) -> Line<'static> {
+        let value = |text: String| Span::styled(text, Style::new().add_modifier(Modifier::BOLD));
+        let label = |text: &'static str| Span::styled(text, Style::new().fg(Color::DarkGray));
+        let mut spans = vec![
+            value(self.config.name.clone()),
+            label(" :"),
+            value(self.config.port.to_string()),
+            label("  "),
+            value(thousands(snapshot.position)),
+            label("/"),
+            value(thousands(snapshot.total)),
+            label(" "),
+            value(percent(snapshot.position, snapshot.total)),
+            label("  "),
+        ];
+        if self.is_done(snapshot) {
+            spans.push(value("DONE".to_owned()));
         } else {
-            let remaining = snapshot.total.saturating_sub(snapshot.position);
-            let seconds = u128::from(remaining) * 60 / u128::from(snapshot.lines_per_minute);
-            format!(
-                "ETA {}",
-                duration(u64::try_from(seconds).unwrap_or(u64::MAX))
-            )
-        };
-        let wraps = if self.config.cycle {
-            format!("  wrap {}", thousands(snapshot.wraps))
-        } else {
-            String::new()
-        };
+            let mut eta = "-".to_owned();
+            if snapshot.lines_per_minute > 0 {
+                let remaining = snapshot.total.saturating_sub(snapshot.position);
+                let seconds = u128::from(remaining) * 60 / u128::from(snapshot.lines_per_minute);
+                eta = duration(u64::try_from(seconds).unwrap_or(u64::MAX));
+            }
+            spans.extend([label("ETA "), value(eta)]);
+        }
+        spans.extend([
+            label("  "),
+            value(thousands(snapshot.lines_per_minute)),
+            label(" items/min  "),
+            value(thousands(snapshot.requests_per_minute)),
+            label(" req/min"),
+        ]);
+        if self.config.cycle {
+            spans.extend([label("  wrap "), value(thousands(snapshot.wraps))]);
+        }
         let blocked = snapshot
             .rows
             .iter()
             .filter(|row| row.client.blocked)
             .count();
-        let ips = if snapshot.rows.len() == 1 {
-            "IP"
-        } else {
-            "IPs"
-        };
-        format!(
-            "{} :{}  {}/{} {}  {eta}  {} items/min  {} req/min{wraps}  {} {ips}, {} blocked",
-            self.config.name,
-            self.config.port,
-            thousands(snapshot.position),
-            thousands(snapshot.total),
-            percent(snapshot.position, snapshot.total),
-            thousands(snapshot.lines_per_minute),
-            thousands(snapshot.requests_per_minute),
-            thousands(snapshot.rows.len() as u64),
-            thousands(blocked as u64),
-        )
+        let mut blocked_value = value(thousands(blocked as u64));
+        if blocked > 0 {
+            blocked_value = blocked_value.red();
+        }
+        spans.extend([
+            label("  "),
+            value(thousands(snapshot.rows.len() as u64)),
+            label(if snapshot.rows.len() == 1 {
+                " IP, "
+            } else {
+                " IPs, "
+            }),
+            blocked_value,
+            label(" blocked"),
+        ]);
+        Line::from(spans)
     }
 
     /// Draws the clients table of `snapshot` at `now` in `area` of `buf`.
@@ -641,8 +660,7 @@ impl Dashboard {
                 .0;
             x = x.saturating_add(1);
         }
-        let status = self.status(snapshot);
-        buf.set_stringn(x, area.y, status, usize::from(area.width), Style::new());
+        buf.set_line(x, area.y, &self.status(snapshot), area.width);
 
         // Between the blank row under the status line and the key bar
         let middle = area.height.saturating_sub(3);
@@ -1190,6 +1208,16 @@ mod tests {
                 "F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit",
             ]
         );
+
+        // The status line's values are bold and the words between them dimmed; a count of
+        // blocked IPs above 0 is red
+        let screen = test.draw();
+        let buffer = test.terminal.backend().buffer();
+        let (x, _) = find(&screen[..1], "1,000 items/min");
+        assert!(buffer[(x, 0)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(x + 6, 0)].fg, Color::DarkGray);
+        let (x, _) = find(&screen[..1], "1 blocked");
+        assert_eq!(buffer[(x, 0)].fg, Color::Red);
     }
 
     #[test]
