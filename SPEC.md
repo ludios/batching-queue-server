@@ -26,7 +26,7 @@ The operator will read and maintain this code. Prefer the plainest design that m
 - The sort column, the sort direction, and which optional columns are shown are remembered across restarts.
 - The clients table has a column with the reverse DNS name of each IP.
 - Sorting works like `htop`: click a column header, or use function keys.
-- Every setting is a command-line option. No environment variable is read.
+- Every setting is a command-line option. No setting is taken from an environment variable.
 - Cycling is off unless `--cycle` is given. (In the Node version it was on by default.)
 
 ## Command line
@@ -38,28 +38,28 @@ batching-queue-server [OPTIONS] ITEM_FILE
 | Option | Default | Meaning |
 |---|---|---|
 | `--state-file FILE` | the `ITEM_FILE` path with `.bqs.json` appended | Where the state file is. For `/data/items.txt` the default is `/data/items.txt.bqs.json`, in the same directory as the item file. |
-| `--port PORT` | `31417` | TCP port to listen on. |
-| `--cycle` | cycling is off | Turn cycling on. With cycling off, the server stops handing out lines at the end of the file. With cycling on, it starts again at the first line after the last line was handed out. |
+| `--port PORT` | `31417` | TCP port to listen on, from 1 to 65535. |
+| `--cycle` | cycling is off | Turn cycling on. With cycling off, the server stops handing out lines when it has handed out the last line of the file. With cycling on, it then continues with the first line of the file again. |
 | `--max-batch N` | `10000` | Upper limit on the number of lines in one response. Must be at least 1. |
-| `--path PATH` | `/` | The only request path at which lines are handed out; every other path gets `403`. A hard-to-guess value such as `/secretword` keeps strangers out. It must start with `/` and consist of printable ASCII characters other than space, `?`, and `#`; any other value is an argument error. |
+| `--path PATH` | `/` | The only request path at which lines are handed out; every other path gets `403`. A long random value such as `/k3v9x2m7q4w8` keeps strangers out. It must start with `/`, consist only of `/` and the characters `A` to `Z`, `a` to `z`, `0` to `9`, `-`, `_`, `.`, and `~`, and have no segment that is `.` or `..`; any other value is an argument error. (Clients send exactly these characters unchanged. Other characters are rewritten or rejected on the way, so a path containing them could never match.) |
 
-Use `clap` (derive). Every setting is an option; no environment variable is read.
+Use `clap` (derive). Every setting is an option; no setting is taken from an environment variable.
 
-`ITEM_FILE` is the only positional argument; a second one is an argument error. (The Node version took its position file there.)
+`ITEM_FILE` is the only positional argument; a second one is an argument error.
 
 Two servers that serve the same item file need different state files; give at least one of them `--state-file`. A server refuses to start while another running server uses the same state file (see "Lock file").
 
 ### Startup order
 
-1. Parse the arguments.
+1. Parse the arguments. If the state file path and the item file path name the same existing file (compare them after `std::fs::canonicalize`), exit with an error.
 2. Open and scan the item file.
 3. Take the lock that belongs to the state file (see "Lock file").
 4. Load the state file (see "State file") and check it against the item file.
 5. Bind the port, without accepting connections yet. Listen on the IPv6 wildcard address `[::]` at the `--port` value, for both IPv4 and IPv6. Do not rely on the system default for this: clear `IPV6_V6ONLY` on the socket explicitly (for example with the `socket2` crate). There is no fallback to IPv4 only.
 6. Save the state file once. This makes a state file location that cannot be written a startup error. Because it comes after every other check, a startup that fails changes nothing on disk, except that it may have created the empty lock file.
-7. Print one line to stderr that names the state file and says either which position was loaded from it or that it was newly created. Then start the dashboard and accept connections.
+7. Print one line to stderr that names the state file and says either which position was loaded from it or that it was newly created, and whether cycling is on. Then start the dashboard and accept connections.
 
-Argument errors are reported by `clap` in its usual way (its own message, exit status 2). Every other startup error (unreadable item file, state file in use by another server, invalid or unreadable state file, state file that cannot be written, port in use) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
+Argument errors are reported by `clap` in its usual way (its own message, exit status 2). Every other startup error (unreadable item file, state file in use by another server, invalid or unreadable state file, state file path that names the item file, state file that cannot be written, port that cannot be bound) prints one clear message to stderr and exits with status 1, before the terminal is switched to the dashboard.
 
 ## The item queue
 
@@ -68,8 +68,9 @@ Argument errors are reported by `clap` in its usual way (its own message, exit s
 - A line is a sequence of bytes ended by `\n`. A last line without a final `\n` is also a line. A file that ends with `\n` has no extra empty line after it.
 - Lines are bytes, not text: never validate or convert them. Empty lines are items too. A `\r` before `\n` is part of the line.
 - At startup, and again at each wrap, open the item file by its path and scan it once to count its lines. At startup the scan also finds the byte offset of the next line to serve. Then read forward from there. A scan of a very large file takes seconds, during which no request is served; this is accepted.
-- Because the path is opened again at each wrap, an item file that was replaced during a pass (by renaming a new file over it) is served from the next pass on, as in the Node version.
+- Because the path is opened again at each wrap, an item file that was replaced during a pass (by renaming a new file over it) is served from the next pass on, as in the Node version. This needs cycling to be on; with cycling off there is no wrap.
 - Precondition: nobody modifies the item file in place while the server runs. If the end of the file is reached after a number of lines that differs from the count of the last scan, set the total to the number actually read; do nothing more elaborate.
+- A restart applies the saved position to whatever file is at the path then. The server cannot notice that the item file was replaced while it was stopped, or replaced during a pass that a restart interrupted. To serve a new file from its first line, set `position` to 0 in the state file while the server is stopped.
 
 ### Position
 
@@ -86,13 +87,13 @@ To take up to `n` lines:
 1. Repeat up to `n` times: try to read the next line. If there is one, add it to the batch and increase the position by 1. If there is none, the end of the file is reached; stop.
 2. If the end of the file was reached, cycling is on, and the position is greater than 0: set the position to 0, open the item file again (see "Item file"), and report a wrap, which increases the wrap counter by 1. Do not continue reading in this request; the lines from the top are served to the next request.
 
-The end of the file is reached only when an attempt to read a line finds none. A batch that takes exactly the last line has not reached the end; the next request reaches it, gets an empty batch, and causes the wrap. This is what the Node version does.
+The end of the file is reached only when an attempt to read a line finds none. A batch that takes exactly the last line has not reached the end; the next request reaches it, gets an empty batch, and (with cycling on) causes the wrap. This is what the Node version does.
 
 So a request that reaches the end of the file returns the lines it collected before the end (possibly none). With cycling off, the position stays at the end and every later batch is empty.
 
 All batches are taken one at a time under one lock. Within one run of the server, two requests must never receive the same line in the same pass, and lines are handed out in file order. (After a crash, some lines are handed out again; see "Saving".)
 
-The position advances when the batch is read, not when the client has received it. A client that disconnects before reading its response loses those lines until the next pass. This is accepted.
+The position advances when the batch is read, not when the client has received it. A client that disconnects before reading its response loses those lines; with cycling on they are handed out again in the next pass. This is accepted.
 
 ## HTTP contract
 
@@ -111,12 +112,13 @@ For each request, the first matching row applies:
 - `max` is optional; when absent it is 1. It is valid when the parameter appears at most once and its URL-decoded value consists of one or more ASCII digits `0` to `9` that form a number from 1 to 2^64 − 1. A valid `max` greater than the `--max-batch` value is lowered to that value (the client asked for "at most `max`" lines, so fewer is within the contract). Everything else is invalid: `0`, a leading `+` or `-`, `1.5`, `1e3`, `0x10`, an empty value, a number above 2^64 − 1, a repeated parameter.
 - Other query parameters are ignored.
 - The path of the request is compared with the `--path` value byte for byte, as received: no URL-decoding, no special treatment of a trailing `/`, no case folding. The query string is not part of the path.
-- A wrong path gets exactly the reply that a blocked client gets. A stranger then cannot tell the two apart, and the delay slows down guessing. Do not show or log the `--path` value or the paths of requests.
+- A wrong path gets exactly the reply that a blocked client gets, so that a stranger cannot tell the two apart. Only a long random path keeps strangers out; the delay does not limit a guesser who sends many requests at once. Do not show the `--path` value in the dashboard, and do not log it or the paths of requests. Hiding it from other users of the same machine is not a goal: a command line is visible in the process list.
+- Handle every request in one handler (the router's fallback) that compares the path of the request with the `--path` value itself. Never register the `--path` value as a route pattern.
 - A request is counted, and its client record created, when the handler receives it. Requests that the HTTP library rejects before the handler runs (malformed requests) are not counted.
 - `HEAD` on the right path from a client that is not blocked must get `405` and must not consume lines. Verified on docs.rs for axum 0.8.9: a route registered with `routing::get` is also called for `HEAD` requests. Register the handler so that this cannot happen, and test it.
 - The `Content-Type` value is exactly `text/plain`, with no `charset`, as in the Node version.
 - The 1 second delay slows down clients that poll an empty queue and clients that keep hammering while blocked. Waiting requests must not delay other requests.
-- A block or unblock applies to every request whose handler starts after it. Requests already waiting out their delay finish as they started. The same holds for a pause or resume.
+- The handler decides the outcome of a request in one step, while holding the state lock: it checks the rows of the table in order and, if none of the first five applies, takes the batch. A block, unblock, pause, or resume applies to every request whose decision comes after it. Requests already waiting out their delay finish as they started.
 - The operator can pause the server from the dashboard (see "Keys and mouse"). A paused server answers exactly as if the queue were empty, so clients just idle, and no line is handed out. The pause is not saved: a restart always starts unpaused.
 
 ### Differences from the Node version (all intended)
@@ -127,14 +129,14 @@ These were observed by running the Node version:
 - `max=` and `max` without a value served 1 line. `max=1e3`, `max=0x10`, `max=+5`, and `max=2.0` served 1000, 16, 5, and 2 lines. `max=0`, `max=abc`, and a repeated `max` got an empty `200` after 1 second. All of these are now `400`.
 - There was no upper limit on `max`. Now the `--max-batch` value.
 - A `GET` to any path, for example `/favicon.ico`, consumed a line. Now only the `--path` value (by default `/`) hands out lines, and every other path gets `403`.
-- A request with a method other than `GET` never received a response. Now `405`.
+- A request with a method other than `GET` never received a response. Now `405` (on the right path, from a client that is not blocked).
 - Lines that are not valid UTF-8 were sent with each invalid sequence replaced by U+FFFD. Now every line is sent unchanged.
-- The position file was rewritten in place on every `GET`. An empty position file silently restarted the queue at line 0, and a damaged one made the Node version write `NaN` into it. Now the position is saved in the state file every 30 seconds, and a damaged state file is a startup error.
+- The position file was rewritten in place on every `GET`. An empty position file silently restarted the queue at line 0, and a damaged one made the Node version write `NaN` into it. Now the position is saved in the state file at most about 30 seconds after it changes and at every clean exit (see "Saving"), and a damaged state file is a startup error.
 - The position file was the second positional argument. Now there is a state file, given with `--state-file` or found next to the item file.
 - The port and the cycling setting came from the environment variables `PORT` and `CYCLE`. Now they are the options `--port` and `--cycle`.
 - Cycling was on unless `CYCLE` was exactly `false`. Now cycling is off unless `--cycle` is given.
 
-For valid requests from clients that are not blocked (`GET` on the `--path` value, with `max` absent or a number from 1 to the `--max-batch` value), served from an item file that is valid UTF-8, the response bodies must be byte-identical to the Node version's. After the same sequence of such requests, with the same cycling setting in both versions, the position must equal the number in the Node version's position file.
+For valid requests from clients that are not blocked (`GET` on the `--path` value, with `max` absent or a number from 1 to the `--max-batch` value), served from an item file that is valid UTF-8 by a server that is not paused, with the same cycling setting in both versions: the response bodies must be byte-identical to the Node version's, and after the same sequence of such requests the position must equal the number in the Node version's position file.
 
 ## Client tracking
 
@@ -159,12 +161,13 @@ The `User-Agent` value comes from the network and is drawn on the operator's ter
 
 The dashboard shows the reverse DNS name (the PTR record) of each client IP, as a hint about who the client is.
 
-- Look up each client once per run of the server: when its record is created, or at startup for a record loaded from the state file. Never repeat a lookup, also not after a failure.
+- Look up each client at most once per run of the server: when it makes its first request in this run. A client that was loaded from the state file and makes no request in this run is not looked up. Never repeat a lookup, also not after a failure.
 - Lookups run in the background. No request ever waits for one.
-- At most 8 lookups run at the same time; further ones wait their turn. A lookup that has not finished after 5 seconds is given up.
+- At most 8 lookups run at the same time; further ones wait their turn, for as long as that takes. A lookup is given up 5 seconds after it started running (not 5 seconds after it began to wait).
 - Use the resolver configuration of the system (`/etc/resolv.conf`).
-- The result is the first name in the answer, without its final `.`. The owner of the address controls this name, and it is drawn on the operator's terminal, so clean it in the same way as a `User-Agent` value, and truncate it to 100 `char`s.
-- So a client is in one of three states: not looked up yet; looked up, with a name; looked up, without a name (no PTR record, an error, or given up).
+- If the resolver cannot be set up (for example because `/etc/resolv.conf` is missing), that is not an error: the server runs, and every client that would be looked up counts as looked up without a name.
+- The result is the target name of the first `PTR` record in the answer, without its final `.`. Skip records of every other type; an answer can contain a `CNAME` record before the `PTR` record. A result that is empty counts as no name. The owner of the reverse zone controls this name, and it is drawn on the operator's terminal, so clean it in the same way as a `User-Agent` value. If it is longer than 255 `char`s, keep its last 255, because the domain is at the end.
+- So a client is in one of three states: not looked up yet; looked up, with a name; looked up, without a name (no `PTR` record, an error, or given up).
 - Names are kept in memory only. They are not saved in the state file.
 - Without a dashboard, do no lookups.
 - The name is not verified: nothing checks that the name resolves back to the IP, so the owner of an address can publish any name. The README must say this.
@@ -251,9 +254,9 @@ There is no automatic conversion of a Node position file. The README explains ho
 
 ### Saving
 
-- Save by writing a temporary file in the same directory, calling `fsync` on it, and renaming it over the state file. Without the `fsync`, a power loss can leave an empty state file on some filesystems.
+- Save by writing a temporary file in the same directory, calling `fsync` on it, renaming it over the state file, and calling `fsync` on the directory. Without these, a power loss can leave an empty state file, or the previous one, on some filesystems.
 - Save once at startup (step 6 of "Startup order").
-- After that, save every 30 seconds if anything in the saved data changed since the last save, immediately when a block or unblock happens, and at every clean exit (see "Exiting"). A changed view setting is a change like any other: it waits for the next of these saves.
+- After that, save every 30 seconds if anything in the saved data changed since the last save; immediately when a block or unblock happens; immediately at each wrap; and at every clean exit (see "Exiting"). A changed view setting is a change like any other: it waits for the next of these saves. Measure the 30 seconds with tokio's clock, not with the wall clock, which may jump.
 - Every save is one consistent snapshot: the position, the wrap counter, the view settings, and every client record are from the same instant. Take the snapshot while holding the state lock; write it to disk after releasing that lock, so that a slow disk does not stall requests.
 - Two saves must never interleave, and an older snapshot must never overwrite a newer one.
 - Events, rates, and reverse DNS names are not saved.
@@ -266,14 +269,14 @@ Each of these is a clean exit: `q` confirmed with `y`, `Ctrl-C` in the dashboard
 
 1. Stop handing out lines. From this moment no batch is taken; requests still arriving may be left unanswered.
 2. Save the state file. This snapshot is therefore the final state.
-3. Restore the terminal. After `SIGHUP` the terminal is already gone, so restoring it can fail; ignore that failure. It must not cause a panic, and it comes after the save so that it cannot prevent the save. Check how the restore function you use behaves when the terminal is gone.
+3. Set the terminal title to its `stopped` form (see "Terminal title") and restore the terminal. After `SIGHUP` the terminal is already gone, so both can fail; ignore those failures. They must not cause a panic, and they come after the save so that they cannot prevent the save. Check how the restore function you use behaves when the terminal is gone.
 4. Exit with status 0, or with status 1 if the save failed.
 
 ## Failures while running
 
-If saving the state file fails, or reading the item file fails, the server must stop: stop handing out lines, restore the terminal, print the error to stderr, and exit with status 1. A server that kept handing out lines while its saves fail would hand out an unbounded number of them again after a restart. A request whose read of the item file failed gets no response.
+If saving the state file fails, or reading the item file fails, the server must stop: stop handing out lines; save the state file, unless a failed save is the reason for stopping; set the `stopped` title and restore the terminal; print the error to stderr; and exit with status 1. A server that kept handing out lines while its saves fail would hand out an unbounded number of them again after a restart. A request whose read of the item file failed gets no response.
 
-A panic anywhere must end the whole process, never leave a half-working server. Set `panic = "abort"` in the Cargo profiles, and make sure the panic hook restores the terminal (including mouse capture) first.
+A panic anywhere must end the whole process, never leave a half-working server. Set `panic = "abort"` in the Cargo profiles, and make sure the panic hook first sets the `stopped` title and restores the terminal (including mouse capture).
 
 ## Dashboard
 
@@ -283,7 +286,7 @@ If both stdin and stdout are terminals, the server draws the dashboard. Otherwis
 
 ### Layout
 
-From top to bottom. The numbers are examples.
+From top to bottom. The numbers are examples, from a server started with `--cycle`.
 
 ```
 items.txt :31417  1,234,567/9,876,543 12.5%  ETA 14d  412 items/min  38 req/min  wrap 3  3 IPs, 1 blocked
@@ -291,7 +294,6 @@ items.txt :31417  1,234,567/9,876,543 12.5%  ETA 14d  412 items/min  38 req/min 
 [block]    203.0.113.7    12,400     3d    2s     124  crawler-7.example.net
 [unblock]  198.51.100.9      300     1h    0s   1,215  -
 [block]    2001:db8::17        0     5m    5m       1  scanner.example.org
-11:56:10 2001:db8::17  wrong path
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
 F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
@@ -302,7 +304,7 @@ F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
    - port
    - position `/` total lines
    - percent with one decimal, or `-` when the item file has no lines
-   - `ETA` and the estimated time until the end of the current pass: the remaining lines divided by the 60 second rate, shown in the same form as an age (see "Clients table"), or as `-` when that rate is 0. When cycling is off and the position is at the end of the file, show `DONE` in place of `ETA` and the estimate.
+   - `ETA` and the estimated time until the end of the current pass: the remaining lines divided by the 60 second rate of lines handed out, shown in the same form as an age (see "Clients table"), or as `-` when that rate is 0. When cycling is off and the position equals the total number of lines, show `DONE` in place of `ETA` and the estimate.
    - lines handed out in the last 60 seconds
    - requests in the last 60 seconds
    - wrap counter (omit when cycling is off)
@@ -329,12 +331,12 @@ Columns, left to right:
 | `FIRST` | age of `first_seen` | time | most recent first |
 | `LAST` | age of `last_seen` | time | most recent first |
 | `REQS` | `requests` | number | largest first |
-| `HOST` | the reverse DNS name; `-` when the lookup found none; empty while the client has not been looked up yet | the name with its labels in reverse order (`host.example.com` sorts as `com.example.host`), ignoring case, so that clients of one domain are adjacent; clients without a name come after all names | ascending |
+| `HOST` | the reverse DNS name; `-` when the lookup found none; empty while the client has not been looked up | the whole name (not the shortened form on screen), ignoring case, compared label by label from the last label to the first: `host.example.com` compares as the list `com`, `example`, `host`. So clients of one domain are adjacent. Compare lists, not joined strings, because `-` sorts before `.`. Clients without a name are equal to each other and come after all clients with a name, in both directions. | ascending |
 | `UA` | `user_agent`, or `-` | not sortable | |
 
-- The `HOST` column is shown unless the saved view settings say otherwise, and can be hidden. Its width is that of the longest name in it, but at most 40 columns; longer names are truncated.
+- The `HOST` column is shown unless the saved view settings say otherwise, and can be hidden. Its width is that of the longest name in it, but at least that of its header and at most 40 columns. A longer name is shown as `…` followed by its last 39 characters, because the domain is at the end.
 - The `UA` column is hidden unless the saved view settings say otherwise. When shown, it takes the remaining width and is truncated.
-- A hidden column cannot become the sort column. If the sort column gets hidden, the order stays as it is.
+- A hidden column cannot become the sort column. If the sort column gets hidden, the rows stay sorted by it in the same direction, and no header carries `▼` or `▲`. `F6` then moves on to the next shown sortable column to the right of it, wrapping around.
 - Ages show only their largest unit: `42s`, `17m`, `5h` (below 48 hours), `12d`.
 - Column widths adapt to their content. Columns that do not fit in the window are cut off on the right.
 - Rows of blocked IPs are drawn in a clearly different style (for example red), so that the block state is visible without reading the first column.
@@ -355,11 +357,11 @@ While the dashboard runs, set the title of the terminal window, so that a list o
 
 | Situation | Title |
 |---|---|
-| Cycling is off and the position is at the end of the file | `DONE items.txt` |
+| Cycling is off and the position equals the total number of lines | `DONE items.txt` |
 | The server is paused | `PAUSED 12.5% items.txt` |
 | Otherwise | `12.5% items.txt` |
 
-The percent is the one from the status line. Write the title only when its text changes. At every exit that restores the terminal (a clean exit, or a failure while running), set the title to `stopped items.txt`.
+The percent is the one from the status line. Write the title only when its text changes. For an item file without lines the percent is `-`, as in the status line, so the title is `- items.txt`. At every exit that restores the terminal (a clean exit, a failure while running, or a panic), set the title to `stopped items.txt`.
 
 The item file name comes from the command line and is written to the terminal, in the title and in the status line. Clean it first in the same way as a `User-Agent` value.
 
@@ -386,7 +388,7 @@ Each row: local time as `HH:MM:SS`, client IP, outcome. The outcome is the numbe
 | `Ctrl-C` | Quit immediately, also while the quit question is shown. |
 | Left click on a key-bar label | Same as that key. |
 
-Every function key has a letter alternative because terminal emulators often keep some function keys for themselves. React to key presses and key repeats, not to key releases. React only to the press of the left mouse button and to the wheel; ignore drags, releases, and movement.
+Every function key has a letter alternative because terminal emulators often keep some function keys for themselves. The keys that move the selection react to key presses and key repeats. Every other key reacts to key presses only, so that a held key does not block and unblock, or pause and resume, over and over. No key reacts to a key release. React only to the press of the left mouse button and to the wheel; ignore drags, releases, and movement.
 
 Quitting the dashboard stops the server; that is why `q` asks first. Every way of quitting is a clean exit (see "Exiting").
 
@@ -396,7 +398,7 @@ Redraw after every input event, and at least 4 times per second. Wait for input 
 
 The operator's other Rust projects use edition 2024, `anyhow`, `clap`, `tokio`, `axum`, `serde`, `jiff`, and `tracing`; use the same here. Versions current on 2026-11-24: `ratatui` 0.30, `crossterm` 0.29, `axum` 0.8, `tokio` 1, `jiff` 1 (its `serde` feature is needed for the timestamps in the state file). `ratatui` 0.30 is split into several crates and its API has changed between releases, so read the docs.rs pages for the exact versions you pin instead of relying on memory. Take `crossterm` through the version that `ratatui` uses, so that there is only one copy.
 
-For reverse DNS, use `hickory-resolver` (0.26 is current). Verified on docs.rs for 0.26.4: `Resolver::builder_tokio()` builds a resolver from the system configuration, and `Resolver::reverse_lookup` exists; check their exact signatures there. Make the lookup function replaceable, so that tests supply their own and never send a DNS query.
+For reverse DNS, use `hickory-resolver` (0.26 is current; it needs its `tokio` and `system-config` features). Verified on docs.rs for 0.26.4: `Resolver::builder_tokio()` returns a builder that takes the system configuration, building can fail, and `Resolver::reverse_lookup` exists; check their exact signatures there. Make the lookup function replaceable, so that tests supply their own and never send a DNS query.
 
 Verified on docs.rs: `ratatui::init()` enables raw mode and the alternate screen and installs a panic hook that restores the terminal. It does not enable mouse capture; enable that yourself and disable it on every exit path, including panics. `axum::extract::ConnectInfo` works only when the server is started with connection info, for example through `Router::into_make_service_with_connect_info`.
 
@@ -404,7 +406,7 @@ Suggested shape (adjust if something simpler emerges):
 
 - `queue.rs`: the item file reader and the in-memory position. No knowledge of HTTP, clients, or the state file.
 - `state.rs`: clients, events, rates, and loading and saving the state file.
-- `http.rs`: the router and its one handler.
+- `http.rs`: the one handler that serves every request.
 - `tui.rs`: drawing as a function of (view settings, state, current time); input handling as a function from an input event to an action.
 - `main.rs`: arguments, startup checks, wiring, shutdown.
 
@@ -426,7 +428,7 @@ codegen-units = 1
 panic = "abort"
 ```
 
-The repository's `AGENTS.md` applies. Its "Libraries to use" section names JavaScript libraries; the Rust counterparts are `assert!` and friends for invariants, `tracing` for logs, the built-in test harness for unit tests, and `proptest` for property-based tests. The local `cargo` wrapper supports only nightly Rust.
+The repository's `AGENTS.md` applies. Use `assert!` and its relatives for invariants, `tracing` for logs, the built-in test harness for unit tests, and `proptest` for property-based tests. The local `cargo` wrapper supports only nightly Rust.
 
 ## Tests
 
@@ -435,14 +437,15 @@ Required, at minimum:
 **Queue**
 
 - Batches in file order; a short batch at the end of the file; a batch that takes exactly the last line, followed by a request that gets an empty batch and wraps; no wrap when cycling is off, which is the default; a last line without `\n`; empty lines; an empty file; bytes that are not valid UTF-8.
-- An item file replaced during a pass (by renaming a new file over it) is served from the next pass on.
+- With cycling on: an item file replaced during a pass (by renaming a new file over it) is served from the next pass on.
 - Restart: stop after some batches, open a new queue at the position that the old one reported, continue with the next line.
 - A starting position greater than the line count: error.
-- Property test: for arbitrary file bytes and an arbitrary sequence of batch sizes, with a simulated restart (as above) at arbitrary points, the concatenation of all batches taken before the first wrap is a prefix of the file's lines, each followed by `\n`; if a wrap happened, it is all of them.
+- Property test, with cycling on: for arbitrary file bytes and an arbitrary sequence of batch sizes, with a simulated restart (as above) at arbitrary points, the concatenation of all batches taken before the first wrap is a prefix of the file's lines, each followed by `\n`; if a wrap happened, it is all of them.
 
 **HTTP** (drive the router directly and supply the peer address yourself, so that tests can act as several client IPs; use tokio's paused time so that the 1 second delays cost nothing)
 
 - Each row of the HTTP contract table, including that the non-`200` rows and `HEAD` consume no lines.
+- Precedence when several rows apply: a blocked client on a wrong path, a wrong path with a method other than `GET`, and an invalid `max` while paused each get the reply of the first matching row.
 - With `--path /secret`: `/secret` and `/secret?max=2` are served; `/`, `/secret/`, `/SECRET`, and `/%73ecret` get `403` after 1 second and consume no lines. A `--path` value without a leading `/`, or containing `?`, is an argument error.
 - Each kind of invalid `max` listed above, and lowering to the `--max-batch` value.
 - A blocked IP gets `403` while another IP is served normally; unblocking restores service.
@@ -454,10 +457,12 @@ Required, at minimum:
 
 **Reverse DNS** (with a lookup function supplied by the test, and tokio's paused time)
 
-- Many requests from one IP cause one lookup. A client loaded from the state file is looked up at startup.
+- Many requests from one IP cause one lookup. A client loaded from the state file is not looked up at startup; it is looked up when it makes its first request in this run.
 - A request is answered while the lookup for its client has not finished.
+- Without a dashboard, no lookup is made. No name appears in the state file.
 - With more than 8 new clients at once, at most 8 lookups run at the same time, and all of them finish eventually.
-- A lookup that never answers is given up after 5 seconds, and the client then counts as looked up without a name.
+- A lookup that never answers is given up 5 seconds after it started running, and the client then counts as looked up without a name. A ninth lookup that waited longer than 5 seconds for its turn still runs and can still get its name.
+- An answer with a `CNAME` record before the `PTR` record gives the `PTR` target. A lookup function that reports "resolver not available" makes every client count as looked up without a name, and the server keeps serving.
 - A name with a final `.`, with control characters, or longer than 100 `char`s is stored without the `.`, cleaned, and truncated.
 
 **State file** (every test uses an item file in its own fresh temporary directory, because the default state file is written next to the item file)
@@ -466,8 +471,8 @@ Required, at minimum:
 - Startup errors: an empty file; damaged JSON; a wrong `version`; a missing field; a `view` with an unknown `sort_column`; a file holding only digits (a Node position file); a directory at the state file path; a `position` greater than the line count; `--state-file` naming the item file; a state file path whose parent directory does not exist (this is how to test "cannot be written"; a read-only directory is still writable for root).
 - A startup that fails leaves an existing state file unchanged.
 - While one server runs, a second server with the same state file exits with a startup error and changes neither the state file nor the first server's behavior. After the first server has ended, in any way, a new server starts normally although the lock file still exists.
-- Through the whole server: hand out some lines, exit cleanly, start again with the same state file, and the next request continues with the next line; the wrap counter is kept too.
-- With paused time: after a hand-out, the file on disk holds the new position within 30 seconds, without an exit. After a block, the file on disk holds it immediately.
+- Through the whole server: hand out some lines, exit cleanly, start again with the same state file, and the next request continues with the next line; with `--cycle` and at least one wrap, the wrap counter is kept too. Without `--cycle`, a request after the last line gets an empty batch and the position stays at the end.
+- With paused time: after a hand-out, once 30 seconds have passed and the save that started then has finished, the file on disk holds the new position, without an exit. The file is not rewritten between two such saves, and not at all while nothing in the saved data changes. After a block, an unblock, or a wrap, the file on disk holds the change without waiting for the 30 seconds.
 - A start from a snapshot that is older than the last hand-outs repeats those lines and skips none.
 - Without `--state-file`, the state file for `items.txt` is `items.txt.bqs.json` (append to the whole path; `Path::with_extension` would give `items.bqs.json`). A second positional argument is an argument error.
 
@@ -478,7 +483,7 @@ Required, at minimum:
 - The selection stays on the same IP when the rows re-sort.
 - A dashboard started from saved view settings shows that sort column, that direction, and those columns; changing them changes what the next save writes.
 - `F2` shows and hides the `UA` column; `F3` shows and hides the `HOST` column.
-- Sorting by `HOST` puts `b.example.com` next to `a.example.com` and before `a.example.net`, and puts clients without a name last. The `HOST` cell is `-` for a client looked up without a name and empty for a client not looked up yet.
+- Sorting by `HOST` puts `b.example.com` next to `a.example.com` and before `a.example.net`, keeps `a.foo-bar.com` and `b.foo-bar.com` adjacent although `c.foo.com` exists, and puts clients without a name last in both directions. The `HOST` cell is `-` for a client looked up without a name and empty for a client not looked up. A name longer than the column shows its end.
 - `F5` pauses and resumes; while paused, the status line starts with `PAUSED` and the key bar shows `F5 Resume`.
 - The status line shows the number of client IPs and of blocked ones, and shows `DONE` when cycling is off and the position is at the end of the file.
 - The title text for each row of the "Terminal title" table, and for an item file without lines.
@@ -487,22 +492,23 @@ Required, at minimum:
 
 **One-time checks, not kept in the repository**
 
-- Before deleting the Node version: give each version its own copy of one item file that is valid UTF-8, start both at the same position, send both the same sequence of valid requests, and confirm byte-identical bodies. After a clean exit, the position in the Rust version's state file must equal the number in the Node version's position file. Do this once with cycling on in both versions (the Node version's default; `--cycle` for the Rust version), including a wrap, and once with cycling off in both (`CYCLE=false` for the Node version), including requests after the end of the file. Then follow the README's instructions for moving from the Node version, using that position file, and confirm that the Rust version continues with the next line.
-- Run the real binary in a detached `tmux` session, drive it with `tmux send-keys`, send requests with `curl`, and read the screen with `tmux capture-pane -p`. Confirm that the dashboard looks like the layout above and that keys work. Confirm that the terminal is restored after quitting, after `SIGTERM`, and after a forced panic. Confirm that the state file is saved when the `tmux` session is killed while the server runs (this sends `SIGHUP`).
+- Before deleting the Node version: give each version its own copy of one item file that is valid UTF-8, start both at the same position, send both the same sequence of valid requests, and confirm byte-identical bodies. After a clean exit, the position in the Rust version's state file must equal the number in the Node version's position file. Do this once with cycling on in both versions (the Node version's default; `--cycle` for the Rust version), including a wrap, and once with cycling off in both (`CYCLE=false` for the Node version), including requests after the end of the file. Then stop a Node run in the middle of a pass, follow the README's instructions for moving from the Node version with that run's position file, and confirm that the Rust version continues with the next line.
+- Run the real binary in a detached `tmux` session, drive it with `tmux send-keys`, send requests with `curl`, and read the screen with `tmux capture-pane -p`. Confirm that the dashboard looks like the layout above and that keys work. Confirm that the terminal is restored after quitting, after `SIGTERM`, and after a forced panic. Check the default end state too: without `--cycle`, after the last line the status line and the title show `DONE`. Confirm that the state file is saved when the `tmux` session is killed while the server runs (this sends `SIGHUP`): kill it a few seconds after a hand-out, well inside the 30 second interval, and check that the saved `position` equals the number of lines handed out.
 
 ## Deliverables
 
 1. The Rust crate at the repository root, with its `Cargo.lock` committed, building without warnings and passing `cargo clippy` and `cargo test`.
-2. `README.md`: what the server does, how to run it, the HTTP contract, the state file and its lock file, the dashboard keys, and that reverse DNS names are not verified. The repository has no README today. Include a section "Moving from the Node version": replace the environment variable `PORT` with `--port`; add `--cycle` unless the old launch set `CYCLE=false`, because cycling is now off by default; remove `CYCLE`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
+2. `README.md`: what the server does, how to run it, the HTTP contract, the state file and its lock file, the dashboard keys, that reverse DNS names are not verified, that the lookups send client IPs to the system's DNS resolver, and that the `--path` value is visible to other users of the machine in the process list. The repository has no README today. Include a section "Moving from the Node version": replace the environment variable `PORT` with `--port`; add `--cycle` unless the old launch set `CYCLE=false`, because cycling is now off by default; remove `CYCLE`; remove the second positional argument; to continue a queue that is in progress, stop the Node version and create the state file from the number in the old position file, for example `echo '{"version":1,"position":'"$(cat OLD_POSITION_FILE)"',"wraps":0,"clients":{}}' > ITEM_FILE.bqs.json`. The old position file stays untouched, so going back to the Node version remains possible. Also say that the position is changed by editing `position` in the state file while the server is stopped.
 3. Removal of `index.js`, `readlines.js`, `package.json`, and `LICENSE`. That `LICENSE` file is the license of the vendored `readlines.js` only. Do not add a license for the Rust crate; the operator has not chosen one.
 4. `.gitignore` with `target/`.
 
 Suggested commit sequence, one logical change each:
 
-1. The Rust server without client tracking or dashboard, at parity with the Node version plus the listed fixes, with the state file (its `clients` always `{}` and no `view` at this step, so that the format does not change later), and with the tests that apply at this step.
-2. Client tracking, blocking in the HTTP handler, and the clients in the state file.
-3. The dashboard.
-4. `README.md` and removal of the Node files.
+1. The Rust server without client tracking or dashboard, at parity with the Node version plus the listed fixes, with `--path`, with the state file and its lock file (`clients` always `{}` and no `view` at this step, so that the format does not change later), and with the tests that apply at this step.
+2. Client tracking, blocking and pausing in the HTTP handler, and the clients in the state file.
+3. The dashboard, including the pause key, the terminal title, and the saved view settings, with an empty `HOST` column.
+4. Reverse DNS lookups.
+5. `README.md` and removal of the Node files.
 
 ## Not included
 
