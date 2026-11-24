@@ -579,7 +579,12 @@ impl Dashboard {
                 style = style.fg(Color::Red);
             }
             if Some(row.ip) == self.selected {
-                style = style.add_modifier(Modifier::REVERSED);
+                // Black on cyan as in htop, but on red for a blocked client, which stays red
+                let mut background = Color::Cyan;
+                if row.client.blocked {
+                    background = Color::Red;
+                }
+                style = style.fg(Color::Black).bg(background);
             }
             buf.set_style(Rect::new(area.x, y, area.width, 1), style);
             for placed in &columns {
@@ -1354,8 +1359,10 @@ mod tests {
         assert!(!test.is_blocked(A) && !test.is_blocked(C));
         assert_eq!(test.order(), [B, A, C]);
 
-        // A click on the last character of `blocked` in the selected row unblocks
+        // The selected row of a blocked client is on red, not on cyan
         let (_, b_y) = find(&test.draw(), "198.51.100.9");
+        assert_eq!(test.terminal.backend().buffer()[(0, b_y)].bg, Color::Red);
+        // A click on the last character of `blocked` in the selected row unblocks
         test.click(6, b_y);
         assert!(!test.is_blocked(B));
         test.press(KeyCode::F(9));
@@ -1391,8 +1398,9 @@ mod tests {
         assert_eq!(test.order(), [C, A, B]);
         assert_eq!(test.dashboard.selected, Some(B));
         let buffer = test.terminal.backend().buffer();
-        assert!(buffer[(20, 5)].modifier.contains(Modifier::REVERSED));
-        assert!(!buffer[(20, 3)].modifier.contains(Modifier::REVERSED));
+        assert_eq!(buffer[(20, 5)].bg, Color::Cyan);
+        assert_eq!(buffer[(99, 5)].bg, Color::Cyan);
+        assert_eq!(buffer[(20, 3)].bg, Color::Reset);
     }
 
     #[test]
