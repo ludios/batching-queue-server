@@ -292,15 +292,14 @@ fn shorten_host(name: &str) -> String {
     format!("…{end}")
 }
 
-/// Returns the label in the first column for a client that is blocked as `blocked` says.
-fn block_label(blocked: bool) -> &'static str {
-    if blocked { "blocked" } else { "allowed" }
-}
-
 /// Returns the text of the cell of `column` in the row of `row`, at `now`.
 fn cell(column: Column, row: &Row, now: Timestamp) -> String {
     match column {
-        Column::Blocked => block_label(row.client.blocked).to_owned(),
+        Column::Blocked => String::from(if row.client.blocked {
+            "blocked"
+        } else {
+            "allowed"
+        }),
         Column::Ip => row.ip.to_string(),
         Column::Items => thousands(row.client.items),
         Column::First => age(now, row.client.first_seen),
@@ -354,16 +353,11 @@ fn place_columns(view: &View, rows: &[Row], now: Timestamp, x: u16, width: u16) 
             // Room for the sort arrow after the header, so that the arrow does not shift the
             // columns to its right
             let header_width = header(column).len() + usize::from(is_sortable(column));
-            let cells_width = if column == Column::Blocked {
-                // As wide as a label, also without rows, so that the first client does not
-                // shift the table
-                block_label(true).len()
-            } else {
-                rows.iter()
-                    .map(|row| cell(column, row, now).chars().count())
-                    .max()
-                    .unwrap_or(0)
-            };
+            let cells_width = rows
+                .iter()
+                .map(|row| cell(column, row, now).chars().count())
+                .max()
+                .unwrap_or(0);
             u16::try_from(header_width.max(cells_width)).unwrap_or(u16::MAX)
         };
         placed.push(Placed {
@@ -738,10 +732,7 @@ impl Dashboard {
         let row = drawn.rows.iter().find(|row| row.y == y)?;
         // A click never blocks a client that was not already selected, because the row under
         // the pointer may have changed just before the click
-        let on_label = placed.is_some_and(|placed| {
-            placed.column == Column::Blocked
-                && usize::from(x - placed.x) < block_label(row.blocked).len()
-        });
+        let on_label = placed.is_some_and(|placed| placed.column == Column::Blocked);
         if on_label && self.selected == Some(row.ip) {
             return Some(Action::SetBlocked(row.ip, !row.blocked));
         }
@@ -1305,7 +1296,7 @@ mod tests {
         assert!(!test.is_blocked(B));
         // A click elsewhere in the row of the selected client does not block it either
         test.click(b_x, b_y);
-        test.click(8, b_y);
+        test.click(7, b_y);
         assert!(!test.is_blocked(B));
 
         // New data that re-sorts the rows arrives after the frame was drawn
@@ -1315,7 +1306,7 @@ mod tests {
         assert!(!test.is_blocked(A) && !test.is_blocked(C));
         assert_eq!(test.order(), [B, A, C]);
 
-        // A click on the last character of `blocked` unblocks
+        // A click on the last character of `blocked` in the selected row unblocks
         let (_, b_y) = find(&test.draw(), "198.51.100.9");
         test.click(6, b_y);
         assert!(!test.is_blocked(B));
