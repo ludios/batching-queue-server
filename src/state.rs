@@ -129,13 +129,15 @@ pub fn temporary_path(path: &Path) -> PathBuf {
     with_suffix(path, ".tmp")
 }
 
-/// The state behind the mutex in `Shared`.
+/// The state behind the mutex in `Shared`. Its fields change only through its methods, which
+/// keep track of what needs saving.
 pub struct State {
-    pub queue: Queue,
+    queue: Queue,
     /// How many times the queue has started a new pass at the first line.
-    pub wraps: u64,
-    /// Every client IP address that has made a request, in its canonical form.
-    pub clients: BTreeMap<IpAddr, Client>,
+    wraps: u64,
+    /// The client records, keyed by canonical IP address: those from the state file, and one
+    /// for each IP address that has made a request since.
+    clients: BTreeMap<IpAddr, Client>,
     /// Whether the operator has paused handing out lines.
     paused: bool,
     /// Whether the server has stopped handing out lines because it is exiting.
@@ -147,9 +149,13 @@ pub struct State {
 }
 
 impl State {
-    /// `wraps` is the wrap counter to start from, and `clients` the known clients, keyed by
-    /// canonical IP address.
+    /// `queue` is the queue, opened at the position to start from; `wraps` is the wrap counter
+    /// to start from; and `clients` are the client records, keyed by canonical IP address.
     pub fn new(queue: Queue, wraps: u64, clients: BTreeMap<IpAddr, Client>) -> State {
+        assert!(
+            clients.keys().all(|ip| *ip == ip.to_canonical()),
+            "every IP address must be canonical"
+        );
         State {
             queue,
             wraps,
@@ -170,42 +176,12 @@ impl State {
         self.stopped
     }
 
-    /// Pauses handing out lines, or resumes it.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the dashboard, which is still to come, calls it")
-    )]
-    pub fn set_paused(&mut self, paused: bool) {
-        self.paused = paused;
-        tracing::info!("{}", if paused { "paused" } else { "resumed" });
-    }
-
     pub fn is_paused(&self) -> bool {
         self.paused
     }
 
-    /// Blocks or unblocks the client at `ip`, which must have made a request, and saves this
-    /// without waiting for the next periodic save.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the dashboard, which is still to come, calls it")
-    )]
-    pub fn set_blocked(&mut self, ip: IpAddr, blocked: bool) {
-        let client = self
-            .clients
-            .get_mut(&ip)
-            .expect("only a known client is blocked or unblocked");
-        if client.blocked == blocked {
-            return;
-        }
-        client.blocked = blocked;
-        self.dirty = true;
-        self.save_requested.notify_one();
-        tracing::info!("{} {ip}", if blocked { "blocked" } else { "unblocked" });
-    }
-
-    /// Counts a request from `ip` at `now`, creating its client record if this is its first
-    /// request.
+    /// Counts a request from `ip` at `now` in the client record of `ip`, which is created if
+    /// `ip` has none.
     ///
     /// `ip` must be in its canonical form. `user_agent` is the value of the first `User-Agent`
     /// header of the request, if it has one.
@@ -236,12 +212,12 @@ impl State {
         client
     }
 
-    /// Takes up to `n` lines from the queue (see `Queue::take`) for the client at `ip`, whose
-    /// request must have been recorded. A wrap is counted, and saved without waiting for the
-    /// next periodic save.
+    /// Takes up to `n` lines from the queue (see `Queue::take`) for the client at `ip`, which
+    /// must have a client record, and counts them in its `items`. A wrap is counted, and saved
+    /// without waiting for the next periodic save.
     pub fn take(&mut self, ip: IpAddr, n: u64) -> Result<Batch> {
         assert!(!self.stopped, "a batch must not be taken after stopping");
-        let client = self.clients.get_mut(&ip).expect("the request was recorded");
+        let client = self.clients.get_mut(&ip).expect("the client has a record");
         let batch = self.queue.take(n)?;
         if batch.lines > 0 {
             client.items = client.items.saturating_add(batch.lines);
@@ -252,7 +228,7 @@ impl State {
             self.wraps = self.wraps.saturating_add(1);
             self.save_requested.notify_one();
             tracing::info!(
-                "reached the end of the item file; starting again at its first line (wrap {}, {} lines)",
+                "reached the end of the item file; starting a new pass (wrap {}, {} lines)",
                 self.wraps,
                 self.queue.total()
             );
@@ -269,6 +245,42 @@ impl State {
             wraps: self.wraps,
             clients: self.clients.clone(),
         }
+    }
+}
+
+/// What the dashboard, which is still to come, will use.
+#[cfg_attr(not(test), expect(dead_code, reason = "the dashboard will call these"))]
+impl State {
+    pub fn queue(&self) -> &Queue {
+        &self.queue
+    }
+
+    pub fn wraps(&self) -> u64 {
+        self.wraps
+    }
+
+    pub fn clients(&self) -> &BTreeMap<IpAddr, Client> {
+        &self.clients
+    }
+
+    /// Pauses handing out lines, or resumes it. A pause is not saved.
+    pub fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+    }
+
+    /// Blocks or unblocks the client at `ip` (in its canonical form), which must have a client
+    /// record. A change is saved without waiting for the next periodic save.
+    pub fn set_blocked(&mut self, ip: IpAddr, blocked: bool) {
+        let client = self
+            .clients
+            .get_mut(&ip)
+            .expect("only a known client is blocked or unblocked");
+        if client.blocked == blocked {
+            return;
+        }
+        client.blocked = blocked;
+        self.dirty = true;
+        self.save_requested.notify_one();
     }
 }
 

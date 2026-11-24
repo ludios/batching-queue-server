@@ -110,7 +110,7 @@ struct Server {
     router: axum::Router,
     /// Receives the errors that must stop the server.
     fatal: UnboundedReceiver<anyhow::Error>,
-    /// Holds the lock on the state file while open.
+    /// The open lock file, which keeps the lock of the state file until the server is dropped.
     _lock: File,
 }
 
@@ -147,18 +147,12 @@ fn start(args: &Args) -> Result<Server> {
     shared.save()?;
 
     let cycling = if args.cycle { "on" } else { "off" };
-    if created {
-        print_line(&format!(
-            "created the state file {}; starting at the first of {total} lines; cycling is {cycling}",
-            shared.path().display()
-        ));
-    } else {
-        print_line(&format!(
-            "loaded position {} of {total} lines from the state file {}; cycling is {cycling}",
-            loaded.position,
-            shared.path().display()
-        ));
-    }
+    let action = if created { "created" } else { "loaded" };
+    print_line(&format!(
+        "{action} the state file {}: position {} of {total} lines; cycling is {cycling}",
+        shared.path().display(),
+        loaded.position
+    ));
 
     let (fatal_sender, fatal) = mpsc::unbounded_channel();
     let config = http::Config {

@@ -15,8 +15,9 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
-/// How long a request waits before it is told that it gets no lines, so that clients that poll
-/// an empty queue, keep hammering while blocked, or keep guessing the path are slowed down.
+/// How long a request waits for its reply when the client is blocked, the path is wrong, the
+/// server is paused, or the queue has no line for it; this slows down clients that keep
+/// hammering while blocked, keep guessing the path, or poll an empty queue.
 pub const DELAY: Duration = Duration::from_secs(1);
 
 pub struct Config {
@@ -32,25 +33,6 @@ struct App {
     config: Arc<Config>,
     /// Where the handler sends an error that must stop the server.
     fatal: UnboundedSender<anyhow::Error>,
-}
-
-/// Returns the router of the server.
-///
-/// `fatal` is where the handler sends an error that must stop the server: a failed read of the
-/// item file. The handler then stops the state, and the request gets no response.
-pub fn router(
-    shared: Arc<Shared>,
-    config: Config,
-    fatal: UnboundedSender<anyhow::Error>,
-) -> Router {
-    let app = App {
-        shared,
-        config: Arc::new(config),
-        fatal,
-    };
-    // A fallback rather than a route, so that the handler sees every method and every path as
-    // they are. (`routing::get` would also call it for HEAD requests, as if they were GETs.)
-    Router::new().fallback(handle).with_state(app)
 }
 
 /// The reply to one request.
@@ -141,7 +123,8 @@ fn parse_max(query: Option<&str>) -> Result<u64, &'static str> {
 }
 
 /// Decides the reply to the request `request` from the client at `ip` (in its canonical form)
-/// at `now`, and records it. Takes a batch if the reply hands out lines.
+/// at `now`, and counts the request in the client's record. Takes a batch if the reply hands
+/// out lines.
 ///
 /// Returns None if the server has stopped handing out lines, or an error if reading the item
 /// file failed, after stopping the server.
@@ -182,6 +165,11 @@ fn decide(
     Ok(Some(Reply::Lines(batch.body, batch.lines)))
 }
 
+/// Handles every request (see the HTTP contract in SPEC.md): `app` is the server, and `peer` is
+/// the address of the client.
+///
+/// Never returns when the server has stopped handing out lines, or when reading the item file
+/// failed (after sending the error to `app.fatal`), so that the request gets no response.
 async fn handle(
     State(app): State<App>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
@@ -207,6 +195,26 @@ async fn handle(
     };
     tracing::info!("{ip} {reply}");
     reply.respond().await
+}
+
+/// Returns the router of the server, which needs to be served with connection info (see
+/// `Router::into_make_service_with_connect_info`).
+///
+/// `shared` is the state of the server, and `config` its settings. `fatal` is where the handler sends an error that must stop the server: a failed read of the
+/// item file. The handler then stops the state, and the request gets no response.
+pub fn router(
+    shared: Arc<Shared>,
+    config: Config,
+    fatal: UnboundedSender<anyhow::Error>,
+) -> Router {
+    let app = App {
+        shared,
+        config: Arc::new(config),
+        fatal,
+    };
+    // A fallback rather than a route, so that every request, whatever its method and path,
+    // reaches the handler, which compares the path itself
+    Router::new().fallback(handle).with_state(app)
 }
 
 #[cfg(test)]
@@ -313,11 +321,11 @@ mod tests {
         }
 
         fn position(&self) -> u64 {
-            self.shared.state.lock().unwrap().queue.position()
+            self.shared.state.lock().unwrap().queue().position()
         }
 
         fn client(&self, ip: &str) -> Client {
-            self.shared.state.lock().unwrap().clients[&ip.parse().unwrap()].clone()
+            self.shared.state.lock().unwrap().clients()[&ip.parse().unwrap()].clone()
         }
 
         fn set_blocked(&self, ip: &str, blocked: bool) {
@@ -384,7 +392,7 @@ mod tests {
         assert_served(&server.get("/?max=2").await, "a\nb\n");
         assert_served(&server.get("/?max=2").await, "");
         assert_served(&server.get("/?max=2").await, "a\nb\n");
-        assert_eq!(server.shared.state.lock().unwrap().wraps, 1);
+        assert_eq!(server.shared.state.lock().unwrap().wraps(), 1);
     }
 
     #[tokio::test(start_paused = true)]
@@ -593,7 +601,7 @@ mod tests {
             .request("::ffff:203.0.113.7", Method::GET, "/wrong")
             .await;
         assert_eq!(server.client(ip).requests, 7);
-        assert_eq!(server.shared.state.lock().unwrap().clients.len(), 1);
+        assert_eq!(server.shared.state.lock().unwrap().clients().len(), 1);
     }
 
     #[tokio::test(start_paused = true)]
