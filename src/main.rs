@@ -142,7 +142,7 @@ fn start(args: &Args) -> Result<Server> {
     let listener = bind(args.port)?;
 
     let total = queue.total();
-    let state = State::new(queue, loaded.wraps, loaded.clients);
+    let state = State::new(queue, loaded.wraps, loaded.clients, loaded.view);
     let shared = Arc::new(Shared::new(state, state_file));
     shared.save()?;
 

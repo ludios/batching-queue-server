@@ -220,7 +220,7 @@ pub fn router(
 mod tests {
     use super::*;
     use crate::queue::Queue;
-    use crate::state::Client;
+    use crate::state::{Client, View};
     use axum::body::Body;
     use axum::http::{HeaderMap, Request};
     use std::collections::BTreeMap;
@@ -244,7 +244,7 @@ mod tests {
         fs::write(&item_file, contents).unwrap();
         let queue = Queue::open(&item_file, 0, cycle).unwrap();
         let shared = Arc::new(Shared::new(
-            ServerState::new(queue, 0, BTreeMap::new()),
+            ServerState::new(queue, 0, BTreeMap::new(), View::default()),
             dir.path().join("items.txt.bqs.json"),
         ));
         let (fatal, _) = tokio::sync::mpsc::unbounded_channel();

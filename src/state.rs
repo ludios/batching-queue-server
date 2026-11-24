@@ -117,6 +117,47 @@ fn deserialize_clients<'de, D: Deserializer<'de>>(
     deserializer.deserialize_map(ClientsVisitor)
 }
 
+/// A column of the dashboard's clients table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Column {
+    /// The column that says whether the client is blocked.
+    Blocked,
+    Ip,
+    Items,
+    First,
+    Last,
+    Reqs,
+    Host,
+    /// The `User-Agent` column, which cannot be the sort column, and so is never in a state file.
+    #[serde(skip)]
+    Ua,
+}
+
+/// The view settings of the dashboard, as the operator has chosen them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct View {
+    /// Never `Column::Ua`.
+    pub sort_column: Column,
+    /// Whether the clients table is sorted in the direction opposite to the one that the sort
+    /// column gets when it is first chosen.
+    pub sort_inverted: bool,
+    pub show_host: bool,
+    pub show_ua: bool,
+}
+
+impl Default for View {
+    fn default() -> View {
+        View {
+            sort_column: Column::Items,
+            sort_inverted: false,
+            show_host: true,
+            show_ua: false,
+        }
+    }
+}
+
 /// What came of one request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -227,6 +268,7 @@ pub struct State {
     /// The client records, keyed by canonical IP address: those from the state file, and one
     /// for each IP address that has made a request since.
     clients: BTreeMap<IpAddr, Client>,
+    view: View,
     /// The most recent requests, at most `MAX_EVENTS`, oldest first.
     events: VecDeque<Event>,
     rates: Rates,
@@ -242,16 +284,19 @@ pub struct State {
 
 impl State {
     /// `queue` is the queue, opened at the position to start from; `wraps` is the wrap counter
-    /// to start from; and `clients` are the client records, keyed by canonical IP address.
-    pub fn new(queue: Queue, wraps: u64, clients: BTreeMap<IpAddr, Client>) -> State {
+    /// to start from; `clients` are the client records, keyed by canonical IP address; and
+    /// `view` is the view settings of the dashboard.
+    pub fn new(queue: Queue, wraps: u64, clients: BTreeMap<IpAddr, Client>, view: View) -> State {
         assert!(
             clients.keys().all(|ip| *ip == ip.to_canonical()),
             "every IP address must be canonical"
         );
+        assert_ne!(view.sort_column, Column::Ua, "UA cannot be the sort column");
         State {
             queue,
             wraps,
             clients,
+            view,
             events: VecDeque::with_capacity(MAX_EVENTS),
             rates: Rates::new(),
             paused: false,
@@ -356,6 +401,7 @@ impl State {
             version: VERSION,
             position: self.queue.position(),
             wraps: self.wraps,
+            view: self.view,
             clients: self.clients.clone(),
         }
     }
@@ -387,6 +433,20 @@ impl State {
         self.rates.sum(now)
     }
 
+    pub fn view(&self) -> View {
+        self.view
+    }
+
+    /// Changes the view settings of the dashboard to `view`. A change is saved at the next
+    /// periodic save.
+    pub fn set_view(&mut self, view: View) {
+        assert_ne!(view.sort_column, Column::Ua, "UA cannot be the sort column");
+        if view != self.view {
+            self.view = view;
+            self.dirty = true;
+        }
+    }
+
     /// Pauses handing out lines, or resumes it. A pause is not saved.
     pub fn set_paused(&mut self, paused: bool) {
         self.paused = paused;
@@ -414,6 +474,7 @@ struct Saved {
     version: u64,
     position: u64,
     wraps: u64,
+    view: View,
     clients: BTreeMap<IpAddr, Client>,
 }
 
@@ -434,6 +495,9 @@ pub struct Loaded {
     /// The number of lines already handed out in the current pass.
     pub position: u64,
     pub wraps: u64,
+    /// The default view settings if the state file has none.
+    #[serde(default)]
+    pub view: View,
     #[serde(deserialize_with = "deserialize_clients")]
     pub clients: BTreeMap<IpAddr, Client>,
 }
@@ -605,7 +669,7 @@ mod tests {
         fs::write(&item_file, "x\n".repeat(lines)).unwrap();
         let queue = Queue::open(&item_file, 0, true).unwrap();
         let state_file = dir.path().join("items.txt.bqs.json");
-        let state = State::new(queue, 0, BTreeMap::new());
+        let state = State::new(queue, 0, BTreeMap::new(), View::default());
         let shared = Arc::new(Shared::new(state, state_file));
         (dir, shared)
     }
@@ -737,6 +801,43 @@ mod tests {
         );
     }
 
+    /// View settings that differ from the default ones in every field.
+    const VIEW: View = View {
+        sort_column: Column::Host,
+        sort_inverted: true,
+        show_host: false,
+        show_ua: true,
+    };
+
+    #[test]
+    fn a_state_file_without_view_settings_gets_the_default_ones() {
+        let (_dir, shared) = setup(3);
+        let contents = r#"{"version": 1, "position": 0, "wraps": 0, "clients": {}}"#;
+        fs::write(shared.path(), contents).unwrap();
+        assert_eq!(load(shared.path()).unwrap().unwrap().view, View::default());
+        assert_eq!(Loaded::default().view, View::default());
+        assert_eq!(
+            View::default(),
+            View {
+                sort_column: Column::Items,
+                sort_inverted: false,
+                show_host: true,
+                show_ua: false
+            }
+        );
+    }
+
+    #[test]
+    fn a_changed_view_is_saved_like_any_other_change() {
+        let (_dir, shared) = setup(3);
+        let mut state = shared.state.lock().unwrap();
+        state.set_view(View::default());
+        assert!(!state.dirty);
+        state.set_view(VIEW);
+        assert!(state.dirty);
+        assert_eq!(state.view(), VIEW);
+    }
+
     #[test]
     fn save_and_load() {
         let (_dir, shared) = setup(3);
@@ -750,11 +851,13 @@ mod tests {
             take(&mut state, 2);
             state.record_request(ipv6, time("2026-11-24T12:01:02Z"), Some(b"curl/8.9.1"));
             state.set_blocked(ipv6, true);
+            state.set_view(VIEW);
         }
         shared.save().unwrap();
         let loaded = load(shared.path()).unwrap().unwrap();
         assert_eq!(loaded.position, 2);
         assert_eq!(loaded.wraps, 1);
+        assert_eq!(loaded.view, VIEW);
         assert_eq!(loaded.clients, shared.state.lock().unwrap().clients);
         assert_eq!(
             fs::read_to_string(shared.path()).unwrap(),
@@ -762,6 +865,12 @@ mod tests {
   "version": 1,
   "position": 2,
   "wraps": 1,
+  "view": {
+    "sort_column": "host",
+    "sort_inverted": true,
+    "show_host": false,
+    "show_ua": true
+  },
   "clients": {
     "203.0.113.7": {
       "blocked": false,
@@ -822,6 +931,13 @@ mod tests {
         let without_user_agent = r#"{"blocked": false, "items": 1, "requests": 1,
             "first_seen": "2026-11-24T12:00:00Z", "last_seen": "2026-11-24T12:00:00Z"}"#;
         let client = without_user_agent.replace('}', r#", "user_agent": null}"#);
+        // A valid state file with view settings that end with `rest`
+        let with_view = |sort_column: &str, rest: &str| {
+            let view = format!(
+                r#"{{"sort_column": "{sort_column}", "sort_inverted": false, "show_host": true{rest}}}"#
+            );
+            valid.replace("{}", &format!(r#"{{}}, "view": {view}"#))
+        };
         for (contents, error) in [
             ("", "EOF while parsing"),
             (&valid[..20], "EOF while parsing"),
@@ -895,6 +1011,23 @@ mod tests {
             (
                 &valid.replace("{}", r#"{}, "other": 1"#),
                 "unknown field `other`",
+            ),
+            (
+                &with_view("ua", ", \"show_ua\": true"),
+                "unknown variant `ua`",
+            ),
+            (
+                &with_view("IP", ", \"show_ua\": true"),
+                "unknown variant `IP`",
+            ),
+            (
+                &with_view("ip", ", \"show_ua\": 1"),
+                "invalid type: integer `1`, expected a boolean",
+            ),
+            (&with_view("ip", ""), "missing field `show_ua`"),
+            (
+                &with_view("ip", ", \"show_ua\": true, \"x\": 1"),
+                "unknown field `x`",
             ),
         ] {
             let message = load_error(contents);
