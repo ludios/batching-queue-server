@@ -278,6 +278,18 @@ fn percent(position: u64, total: u64) -> String {
     format!("{}.{}%", tenths / 10, tenths % 10)
 }
 
+/// Returns `name` if it fits in `width` screen columns, or else `…` followed by as much of its
+/// end as fits, because the domain is at the end.
+fn shorten_host(name: &str, width: u16) -> String {
+    let width = usize::from(width);
+    let length = name.chars().count();
+    if length <= width {
+        return name.to_owned();
+    }
+    let end: String = name.chars().skip(length - width.saturating_sub(1)).collect();
+    format!("…{end}")
+}
+
 /// Returns the text of the cell of `column` in the row of `row`, at `now`.
 fn cell(column: Column, row: &Row, now: Timestamp) -> String {
     match column {
@@ -328,13 +340,15 @@ impl Placed {
 }
 
 /// Places the columns that `view` shows, left to right from screen column `x`, each as wide as
-/// its widest cell among `rows` at `now`. The `UA` column takes the rest of `width` columns.
+/// its widest cell among `rows` at `now`. The `HOST` column gets at most the rest of `width`
+/// columns, and the `UA` column takes whatever rest is left.
 fn place_columns(view: &View, rows: &[Row], now: Timestamp, x: u16, width: u16) -> Vec<Placed> {
     let mut placed = Vec::new();
     let mut next_x = x;
     for column in COLUMNS.into_iter().filter(|&column| is_shown(view, column)) {
-        let column_width = if column == Column::Ua {
-            x.saturating_add(width).saturating_sub(next_x)
+        let rest = x.saturating_add(width).saturating_sub(next_x);
+        let mut column_width = if column == Column::Ua {
+            rest
         } else {
             // Room for the sort arrow after the header, so that the arrow does not shift the
             // columns to its right
@@ -346,6 +360,9 @@ fn place_columns(view: &View, rows: &[Row], now: Timestamp, x: u16, width: u16) 
                 .unwrap_or(0);
             u16::try_from(header_width.max(cells_width)).unwrap_or(u16::MAX)
         };
+        if column == Column::Host {
+            column_width = column_width.min(rest);
+        }
         placed.push(Placed {
             column,
             x: next_x,
@@ -543,7 +560,11 @@ impl Dashboard {
             }
             buf.set_style(Rect::new(area.x, y, area.width, 1), style);
             for placed in &columns {
-                placed.draw(buf, y, &cell(placed.column, row, now), style);
+                let mut text = cell(placed.column, row, now);
+                if placed.column == Column::Host {
+                    text = shorten_host(&text, placed.width);
+                }
+                placed.draw(buf, y, &text, style);
             }
             self.drawn.rows.push(DrawnRow {
                 y,
@@ -1494,15 +1515,28 @@ mod tests {
     }
 
     #[test]
-    fn a_long_host_name_is_shown_whole() {
+    fn a_long_host_name_is_shown_whole_if_it_fits() {
         let long = format!("{}.example.com", "x".repeat(60));
-        let mut snapshot = snapshot_with(vec![row(A, Host::Name(long.clone()))]);
+        assert_eq!(long.len(), 72);
+        let mut snapshot = snapshot_with(vec![
+            row(A, Host::Name("a.example.com".to_owned())),
+            row(B, Host::Name(long.clone())),
+        ]);
         snapshot.view.show_ua = true;
         let screen = draw_snapshot(&snapshot, 160, 6);
         assert!(
-            screen[2].contains(&format!("{long}  curl/8.9.1")),
+            screen[3].contains(&format!("{long}  curl/8.9.1")),
             "{screen:?}"
         );
+        // The UA column starts after the longest name in every row
+        assert_eq!(screen[2].find("curl"), screen[3].find("curl"), "{screen:?}");
+
+        // On a narrow screen, the name keeps its end and fills the rest of the row
+        let screen = draw_snapshot(&snapshot, 100, 6);
+        assert!(screen[3].ends_with("xxxx.example.com"), "{screen:?}");
+        assert!(screen[3].contains("  …x"), "{screen:?}");
+        assert_eq!(shorten_host("abcdef", 4), "…def");
+        assert_eq!(shorten_host("abcd", 4), "abcd");
     }
 
     #[test]

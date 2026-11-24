@@ -334,10 +334,10 @@ Columns, left to right:
 | `FIRST` | age of `first_seen` | time | most recent first |
 | `LAST` | age of `last_seen` | time | most recent first |
 | `REQS` | `requests` | number | largest first |
-| `HOST` | the reverse DNS name; `-` when the lookup found none; empty while the client has not been looked up | the name, ignoring case, compared label by label from the last label to the first: `host.example.com` compares as the list `com`, `example`, `host`. So clients of one domain are adjacent. Compare lists, not joined strings, because `-` sorts before `.`. Clients without a name are equal to each other and come after all clients with a name, in both directions. | ascending |
+| `HOST` | the reverse DNS name; `-` when the lookup found none; empty while the client has not been looked up | the whole name (not the shortened form on screen), ignoring case, compared label by label from the last label to the first: `host.example.com` compares as the list `com`, `example`, `host`. So clients of one domain are adjacent. Compare lists, not joined strings, because `-` sorts before `.`. Clients without a name are equal to each other and come after all clients with a name, in both directions. | ascending |
 | `UA` | `user_agent`, or `-` | not sortable | |
 
-- At startup, the `HOST` column is shown unless the saved view settings say otherwise. It can be hidden and shown again with a key. Its width is that of the longest name in it, but at least that of its header. Names are not shortened; only the right edge of the screen can cut one off.
+- At startup, the `HOST` column is shown unless the saved view settings say otherwise. It can be hidden and shown again with a key. Its width is that of the longest name in it, but at least that of its header with the sort arrow, and at most the rest of the screen width. A longer name is shown as `…` followed by its end, because the domain is at the end.
 - At startup, the `UA` column is hidden unless the saved view settings say otherwise. It can be shown and hidden again with a key. When shown, it takes the remaining width and is truncated.
 - A hidden column cannot become the sort column. If the sort column gets hidden, the rows stay sorted by it in the same direction, and no header carries `▼` or `▲`. `F6` then moves on to the next shown sortable column to the right of it, wrapping around.
 - Ages show only their largest unit: `42s`, `17m`, `5h` (below 48 hours), `12d`.
@@ -488,7 +488,7 @@ Required, at minimum:
 - The selection stays on the same IP when the rows re-sort.
 - A dashboard started from saved view settings shows that sort column, that direction, and those columns, with the rows in that order, also when the saved sort column is hidden; changing them changes what the next save writes.
 - `F2` shows and hides the `UA` column; `F3` shows and hides the `HOST` column.
-- Sorting by `HOST` puts `b.example.com` next to `a.example.com` and before `a.example.net`, keeps `a.foo-bar.com` and `b.foo-bar.com` adjacent although `c.foo.com` exists, and puts clients without a name last in both directions. The `HOST` cell is `-` for a client looked up without a name and empty for a client not looked up. A name of 73 characters is shown whole, with the `UA` column after it.
+- Sorting by `HOST` puts `b.example.com` next to `a.example.com` and before `a.example.net`, keeps `a.foo-bar.com` and `b.foo-bar.com` adjacent although `c.foo.com` exists, and puts clients without a name last in both directions. The `HOST` cell is `-` for a client looked up without a name and empty for a client not looked up. A name of 72 characters is shown whole on a wide screen, with the `UA` column after it in every row; on a narrower screen it shows its end.
 - `F5` pauses and resumes; while paused, the status line starts with `PAUSED` and the key bar shows `F5 Resume`.
 - The status line shows the number of client IPs and of blocked ones, and shows `DONE` when cycling is off and the position is at the end of the file.
 - The title text for each row of the "Terminal title" table, and for an item file without lines.
