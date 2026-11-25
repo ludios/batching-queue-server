@@ -128,6 +128,7 @@ items.txt :31417  1,234,567/9,876,536 12.5%  ETA 14d  412 items/min  38 req/min 
 allowed  203.0.113.7   12,400      3d     2s    124  crawler-7.example.net
 blocked  198.51.100.9     300      1h     0s  1,215  -
 allowed  2001:db8::17       0      5m     5m      1  scanner.example.org
+─────────────────────────────────────────────────────────────────────────────────────────────────────────
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
 F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
@@ -137,7 +138,7 @@ From top to bottom:
 
 1. The status line: the item file name, the port, the position and the number of lines in the file, and the percent done; the estimated time until the end of the pass, at the rate of the last minute (or `DONE` when cycling is off and every line has been handed out); the lines handed out and the requests in the last minute; the wrap counter (with `--cycle` only); and the number of client IP addresses and how many of them are blocked. While the server is paused, the line starts with `PAUSED`.
 2. The clients table, one row per client IP address. `FIRST` and `LAST` are the times since the client's first and most recent request. `HOST` is the reverse DNS name (the `PTR` record) of the client IP address, as a hint about who the client is: `-` if its lookup in this run didn't find a name, and empty while the client doesn't have a name and its lookup in this run hasn't finished. `UA` is the most recent `User-Agent`; this column is hidden unless the operator has chosen to show it. Rows of blocked IP addresses are drawn in red. The selected row is black on cyan, or black on red if its client is blocked.
-3. The events pane: the most recent requests, newest at the bottom, each with its time, its client, and its outcome (the number of lines handed out, `blocked`, `wrong path`, `paused`, or `rejected` with the status code).
+3. Under a separator line, the events pane: the most recent requests, newest at the bottom, each with its time, its client, and its outcome (the number of lines handed out, `blocked`, `wrong path`, `paused`, or `rejected` with the status code).
 4. The key bar.
 
 The terminal window's title shows the state too: `12.5% items.txt`, `PAUSED 12.5% items.txt`, `DONE items.txt`, and `stopped items.txt` after the server has exited (but not after a `kill -9`).

@@ -17,6 +17,7 @@ use ratatui::crossterm::terminal::{
 use ratatui::crossterm::{cursor, execute};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style, Stylize};
+use ratatui::symbols::line;
 use ratatui::text::{Line, Span};
 use ratatui::{DefaultTerminal, Terminal, backend::CrosstermBackend};
 use std::cmp::Ordering;
@@ -677,13 +678,17 @@ impl Dashboard {
         }
         buf.set_line(x, area.y, &self.status(snapshot), area.width);
 
-        // Between the blank row under the status line and the key bar
-        let middle = area.height.saturating_sub(3);
+        // Between the blank row under the status line and the key bar, less the separator row
+        let middle = area.height.saturating_sub(4);
         let events_height = middle / 3;
         let table_height = middle - events_height;
         let table = Rect::new(area.x, area.y + 2, area.width, table_height);
         self.draw_table(buf, table, snapshot, now);
-        let events = Rect::new(area.x, table.bottom(), area.width, events_height);
+        if area.height >= 4 {
+            let separator = line::HORIZONTAL.repeat(usize::from(area.width));
+            buf.set_string(area.x, table.bottom(), separator, Style::new());
+        }
+        let events = Rect::new(area.x, table.bottom() + 1, area.width, events_height);
         self.draw_events(buf, events, &snapshot.events);
         if area.height >= 2 {
             self.draw_key_bar(buf, area.bottom() - 1, area, snapshot.paused);
@@ -1218,7 +1223,7 @@ mod tests {
                 "allowed  2001:db8::17       0      3d     2s      1",
                 "",
                 "",
-                "",
+                &"─".repeat(100),
                 "",
                 "11:59:59 203.0.113.7   1,000",
                 "11:59:59 198.51.100.9  blocked",
@@ -1435,25 +1440,25 @@ mod tests {
         test.draw();
         let ip = |i: u8| Some(IpAddr::from([10, 0, 0, i]));
         assert_eq!(test.dashboard.selected, ip(0));
-        // 13 rows: 1 status, 1 blank, 1 key bar, 3 events, 1 header, 6 client rows
-        assert_eq!(test.dashboard.drawn.page, 6);
+        // 13 rows: 1 status, 1 blank, 1 key bar, 1 separator, 3 events, 1 header, 5 client rows
+        assert_eq!(test.dashboard.drawn.page, 5);
         test.press(KeyCode::Up);
         assert_eq!(test.dashboard.selected, ip(0));
         test.press(KeyCode::PageDown);
-        assert_eq!(test.dashboard.selected, ip(6));
+        assert_eq!(test.dashboard.selected, ip(5));
         // The table scrolled to keep the selection visible
-        assert_eq!(test.order().last().copied(), ip(6));
+        assert_eq!(test.order().last().copied(), ip(5));
         test.input(mouse(MouseEventKind::ScrollDown, 5, 3));
-        assert_eq!(test.dashboard.selected, ip(9));
+        assert_eq!(test.dashboard.selected, ip(8));
         test.input(mouse(MouseEventKind::ScrollUp, 5, 3));
         test.press(KeyCode::Down);
-        assert_eq!(test.dashboard.selected, ip(7));
+        assert_eq!(test.dashboard.selected, ip(6));
         test.press(KeyCode::End);
         assert_eq!(test.dashboard.selected, ip(19));
         test.press(KeyCode::Down);
         assert_eq!(test.dashboard.selected, ip(19));
         test.press(KeyCode::PageUp);
-        assert_eq!(test.dashboard.selected, ip(13));
+        assert_eq!(test.dashboard.selected, ip(14));
         test.press(KeyCode::Home);
         assert_eq!(test.dashboard.selected, ip(0));
 
@@ -1593,7 +1598,7 @@ mod tests {
             row(B, Host::Name(long.clone())),
         ]);
         snapshot.view.show_ua = true;
-        let screen = draw_snapshot(&snapshot, 160, 7);
+        let screen = draw_snapshot(&snapshot, 160, 8);
         assert!(
             screen[4].contains(&format!("{long}  curl/8.9.1")),
             "{screen:?}"
@@ -1602,7 +1607,7 @@ mod tests {
         assert_eq!(screen[3].find("curl"), screen[4].find("curl"), "{screen:?}");
 
         // On a narrow screen, the name keeps its end and fills the rest of the row
-        let screen = draw_snapshot(&snapshot, 100, 7);
+        let screen = draw_snapshot(&snapshot, 100, 8);
         assert!(screen[4].ends_with("xxxx.example.com"), "{screen:?}");
         assert!(screen[4].contains("  …x"), "{screen:?}");
         assert_eq!(shorten_host("abcdef", 4), "…def");

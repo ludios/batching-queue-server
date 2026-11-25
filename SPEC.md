@@ -300,6 +300,7 @@ items.txt :31417  1,234,567/9,876,536 12.5%  ETA 14d  412 items/min  38 req/min 
 allowed  203.0.113.7   12,400      3d     2s    124  crawler-7.example.net
 blocked  198.51.100.9     300      1h     0s  1,215  -
 allowed  2001:db8::17       0      5m     5m      1  scanner.example.org
+─────────────────────────────────────────────────────────────────────────────────────────────────────────
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
 F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
@@ -316,14 +317,14 @@ F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
    - wrap counter (omit when cycling is off)
    - number of known client IPs, and how many of them are blocked
 2. **Clients table**: one header row, then one row per client.
-3. **Events pane**: the most recent events, newest at the bottom, as many as fit.
+3. **Events pane**: a separator row of `─` (U+2500) across the full width, then the most recent events, newest at the bottom, as many as fit.
 4. **Key bar** (1 row). As in `htop`, the key names are in the terminal's colors and the rest of the row is black on cyan.
 
 In the status line, values are bold and the words between them are dim (not dark gray, which some palettes make the background color), so that the values stand out; a count of blocked IPs above 0 is red. While the server is paused, the status line starts with `PAUSED` in a standout style (for example reverse video), and the key bar shows `F5 Resume` in place of `F5 Pause`.
 
-Let R be the number of rows between the blank row and the key bar. The events pane gets R / 3 rows, rounded down; the clients table, including its header row, gets the rest.
+Let R be the number of rows between the blank row and the key bar, less the separator row. The events pane gets R / 3 rows, rounded down; the clients table, including its header row, gets the rest.
 
-No borders and no titles; they cost rows and columns. Numbers of items and requests use `,` as thousands separator. The dashboard must draw without panicking at every terminal size, down to 1×1, and with an empty item file and with no clients. In a window that is too small, parts are cut off; which parts is up to you.
+Except for the separator row, no borders and no titles; they cost rows and columns. Numbers of items and requests use `,` as thousands separator. The dashboard must draw without panicking at every terminal size, down to 1×1, and with an empty item file and with no clients. In a window that is too small, parts are cut off; which parts is up to you.
 
 ### Clients table
 
