@@ -295,7 +295,6 @@ From top to bottom. The numbers are examples, from a server started with `--cycl
 
 ```
 items.txt                                                                                          :31417
-
          IP            ITEMS▼   FIRST   LAST   REQS                   HOST
 allowed  203.0.113.7   12,400      3d     2s    124  crawler-7.example.net
 blocked  198.51.100.9     300      1h     0s  1,215                      -
@@ -306,7 +305,7 @@ allowed  2001:db8::17       0      5m     5m      1    scanner.example.org
 F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
 ```
 
-1. **Name line** (1 row), then a blank row: the item file name without its directory at the left end, in bold, and `:` followed by the port at the right end. If the window is too narrow for both with a space between them, the name is cut off.
+1. **Name line** (1 row): the item file name without its directory at the left end, and `:` followed by the port at the right end. If the window is too narrow for both with a space between them, the name is cut off. If the window is narrower than `:` and the port, only the name is drawn.
 2. **Clients table**: one header row, then one row per client.
 3. **Progress bar** (1 row), which also separates the clients table from the events pane. Its text starts after one space. The parts of the text come in this order, most important first, because a narrow window cuts off the right end:
    - `PAUSED`, only while the server is paused
@@ -325,7 +324,7 @@ The progress bar is filled from its left end: of its columns, the share that is 
 
 Outside the fill, the percent and the estimate (or `DONE`) are bold, the other values are in the terminal's colors, and the words between the values and the rule are dim (not dark gray, which some palettes make the background color), so that the two values read most often stand out. The fill is black on the terminal's foreground color, or black on yellow while the server is paused, or black on green when cycling is off and the position equals the total number of lines (also while the server is paused). Text in the fill is black, neither bold nor dim. `PAUSED` is black on yellow, and a count of blocked IPs above 0 is black on red; both keep these colors in the fill. Draw each of these as reverse video of the color on black, as for the selected row (see "Clients table"). While the server is paused, the key bar shows `F5 Resume` in place of `F5 Pause`.
 
-Let R be the number of rows between the blank row and the key bar, less the progress bar. The events pane gets R / 3 rows, rounded down; the clients table, including its header row, gets the rest.
+Let R be the number of rows between the name line and the key bar, less the progress bar. The events pane gets R / 3 rows, rounded down; the clients table, including its header row, gets the rest.
 
 Except for the rule in the progress bar, no borders and no titles; they cost rows and columns. Numbers of items and requests use `,` as thousands separator. The dashboard must draw without panicking at every terminal size, down to 1×1, and with an empty item file and with no clients. In a window that is too small, parts are cut off; which parts is up to you.
 

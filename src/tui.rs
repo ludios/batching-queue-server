@@ -481,7 +481,7 @@ impl Dashboard {
 
     /// Draws the name line on the top row of `area` of `buf`: the item file's name at the left
     /// end and the port at the right end. If the two don't fit with a space between them, the
-    /// name is cut off.
+    /// name is cut off. If the row is narrower than the port, only the name is drawn.
     fn draw_name_line(&self, buf: &mut Buffer, area: Rect) {
         let port = format!(":{}", self.config.port);
         let port_width = u16::try_from(port.len()).expect("`:` and at most 5 digits");
@@ -491,8 +491,7 @@ impl Dashboard {
             buf.set_string(area.right() - port_width, area.y, port, Style::new());
         }
         let name = &self.config.name;
-        let bold = Style::new().add_modifier(Modifier::BOLD);
-        buf.set_stringn(area.x, area.y, name, usize::from(name_width), bold);
+        buf.set_stringn(area.x, area.y, name, usize::from(name_width), Style::new());
     }
 
     /// Returns the text of the progress bar for `snapshot`, most important part first, because
@@ -734,13 +733,13 @@ impl Dashboard {
         }
 
         self.draw_name_line(buf, area);
-        // Between the blank row under the name line and the key bar, less the progress bar
-        let middle = area.height.saturating_sub(4);
+        // Between the name line and the key bar, less the progress bar
+        let middle = area.height.saturating_sub(3);
         let events_height = middle / 3;
         let table_height = middle - events_height;
-        let table = Rect::new(area.x, area.y + 2, area.width, table_height);
+        let table = Rect::new(area.x, area.y + 1, area.width, table_height);
         self.draw_table(buf, table, snapshot, now);
-        if area.height >= 4 {
+        if area.height >= 3 {
             self.draw_progress_bar(buf, table.bottom(), area, snapshot);
         }
         let events = Rect::new(area.x, table.bottom() + 1, area.width, events_height);
@@ -1273,11 +1272,11 @@ mod tests {
             screen,
             [
                 &format!("items.txt{:>91}", ":31417"),
-                "",
                 "         IP            ITEMS▼   FIRST   LAST   REQS   HOST",
                 "allowed  203.0.113.7   12,400      3d     2s    124",
                 "blocked  198.51.100.9     300      3d     2s  1,215",
                 "allowed  2001:db8::17       0      3d     2s      1",
+                "",
                 "",
                 "",
                 &format!("{progress:─<100}"),
@@ -1291,7 +1290,7 @@ mod tests {
         // In the progress bar, the percent is bold, the other values are plain, and the words
         // between them and the rule are dim; a count of blocked IPs above 0 is black on red
         let buffer = test.terminal.backend().buffer();
-        assert!(buffer[(0, 0)].modifier.contains(Modifier::BOLD));
+        assert_eq!(buffer[(0, 0)].modifier, Modifier::empty());
         assert_eq!(buffer[(1, 8)].modifier, Modifier::BOLD);
         let (x, _) = find(&screen[8..9], "1,000 items/min");
         assert_eq!(buffer[(x, 8)].modifier, Modifier::empty());
@@ -1302,12 +1301,12 @@ mod tests {
         assert_eq!(buffer[(x, 8)].modifier, Modifier::REVERSED);
 
         // The header row is green, but the header of the sort column is cyan
-        assert_eq!(buffer[(99, 2)].bg, Color::Green);
-        let (x, _) = find(&screen[2..3], "ITEMS▼");
-        assert_eq!(buffer[(x - 1, 2)].bg, Color::Green);
-        assert_eq!(buffer[(x, 2)].bg, Color::Cyan);
-        assert_eq!(buffer[(x + 5, 2)].bg, Color::Cyan);
-        assert_eq!(buffer[(x + 6, 2)].bg, Color::Green);
+        assert_eq!(buffer[(99, 1)].bg, Color::Green);
+        let (x, _) = find(&screen[1..2], "ITEMS▼");
+        assert_eq!(buffer[(x - 1, 1)].bg, Color::Green);
+        assert_eq!(buffer[(x, 1)].bg, Color::Cyan);
+        assert_eq!(buffer[(x + 5, 1)].bg, Color::Cyan);
+        assert_eq!(buffer[(x + 6, 1)].bg, Color::Green);
 
         // The key bar is cyan, but for its key names
         let (x, _) = find(&screen[12..], "F2 UA");
@@ -1323,28 +1322,28 @@ mod tests {
         test.draw();
         assert_eq!(test.order(), [A, B, C]);
 
-        test.click_text(2, "REQS");
+        test.click_text(1, "REQS");
         assert_eq!(test.view().sort_column, Column::Reqs);
         assert_eq!(test.order(), [B, A, C]);
-        assert!(test.draw()[2].contains("REQS▼"));
-        test.click_text(2, "REQS");
+        assert!(test.draw()[1].contains("REQS▼"));
+        test.click_text(1, "REQS");
         assert_eq!(test.order(), [C, A, B]);
-        assert!(test.draw()[2].contains("REQS▲"));
+        assert!(test.draw()[1].contains("REQS▲"));
 
         // A column that becomes the sort column starts with its direction when first chosen
-        test.click_text(2, "IP");
+        test.click_text(1, "IP");
         assert_eq!(
             (test.view().sort_column, test.view().sort_inverted),
             (Column::Ip, false)
         );
         assert_eq!(test.order(), [B, A, C]);
-        assert!(test.draw()[2].contains("IP▲"));
+        assert!(test.draw()[1].contains("IP▲"));
 
         test.press(KeyCode::F(6));
         assert_eq!(test.view().sort_column, Column::Items);
         test.press(KeyCode::Char('i'));
         assert_eq!(test.order(), [C, B, A]);
-        assert!(test.draw()[2].contains("ITEMS▲"));
+        assert!(test.draw()[1].contains("ITEMS▲"));
         test.press(KeyCode::F(7));
         assert_eq!(test.order(), [A, B, C]);
 
@@ -1366,10 +1365,10 @@ mod tests {
         test.press(KeyCode::F(2));
         test.press(KeyCode::F(6));
         assert_eq!(test.view().sort_column, Column::Blocked);
-        assert!(test.draw()[2].starts_with("▼"));
+        assert!(test.draw()[1].starts_with("▼"));
 
         // A click on the UA header does nothing
-        test.click_text(2, "UA");
+        test.click_text(1, "UA");
         assert_eq!(
             (test.view().sort_column, test.view().sort_inverted),
             (Column::Blocked, false)
@@ -1384,9 +1383,9 @@ mod tests {
             ..View::default()
         };
         let mut test = Test::new(10, false, view, &three_clients());
-        assert!(test.draw()[2].contains("HOST▼"));
+        assert!(test.draw()[1].contains("HOST▼"));
         test.press(KeyCode::F(3));
-        let header = &test.draw()[2];
+        let header = &test.draw()[1];
         assert!(!header.contains('▼') && !header.contains('▲'), "{header}");
         assert_eq!(
             test.view(),
@@ -1409,7 +1408,7 @@ mod tests {
             ..view
         };
         let mut test = Test::new(10, false, view, &three_clients());
-        let header = &test.draw()[2];
+        let header = &test.draw()[1];
         assert!(!header.contains('▼') && !header.contains('▲'), "{header}");
         assert!(!header.contains("HOST"), "{header}");
         assert_eq!(test.order(), [B, A, C]);
@@ -1481,11 +1480,11 @@ mod tests {
         assert_eq!(test.dashboard.selected, Some(B));
         let buffer = test.terminal.backend().buffer();
         for x in [20, 99] {
-            assert!(buffer[(x, 5)].modifier.contains(Modifier::REVERSED));
-            assert_eq!(buffer[(x, 5)].fg, Color::Cyan);
-            assert_eq!(buffer[(x, 5)].bg, Color::Black);
+            assert!(buffer[(x, 4)].modifier.contains(Modifier::REVERSED));
+            assert_eq!(buffer[(x, 4)].fg, Color::Cyan);
+            assert_eq!(buffer[(x, 4)].bg, Color::Black);
         }
-        assert!(!buffer[(20, 3)].modifier.contains(Modifier::REVERSED));
+        assert!(!buffer[(20, 2)].modifier.contains(Modifier::REVERSED));
     }
 
     #[test]
@@ -1501,26 +1500,25 @@ mod tests {
         test.draw();
         let ip = |i: u8| Some(IpAddr::from([10, 0, 0, i]));
         assert_eq!(test.dashboard.selected, ip(0));
-        // 13 rows: 1 name line, 1 blank, 1 key bar, 1 progress bar, 3 events, 1 header, 5 client
-        // rows
-        assert_eq!(test.dashboard.drawn.page, 5);
+        // 13 rows: 1 name line, 1 key bar, 1 progress bar, 3 events, 1 header, 6 client rows
+        assert_eq!(test.dashboard.drawn.page, 6);
         test.press(KeyCode::Up);
         assert_eq!(test.dashboard.selected, ip(0));
         test.press(KeyCode::PageDown);
-        assert_eq!(test.dashboard.selected, ip(5));
+        assert_eq!(test.dashboard.selected, ip(6));
         // The table scrolled to keep the selection visible
-        assert_eq!(test.order().last().copied(), ip(5));
+        assert_eq!(test.order().last().copied(), ip(6));
         test.input(mouse(MouseEventKind::ScrollDown, 5, 3));
-        assert_eq!(test.dashboard.selected, ip(8));
+        assert_eq!(test.dashboard.selected, ip(9));
         test.input(mouse(MouseEventKind::ScrollUp, 5, 3));
         test.press(KeyCode::Down);
-        assert_eq!(test.dashboard.selected, ip(6));
+        assert_eq!(test.dashboard.selected, ip(7));
         test.press(KeyCode::End);
         assert_eq!(test.dashboard.selected, ip(19));
         test.press(KeyCode::Down);
         assert_eq!(test.dashboard.selected, ip(19));
         test.press(KeyCode::PageUp);
-        assert_eq!(test.dashboard.selected, ip(14));
+        assert_eq!(test.dashboard.selected, ip(13));
         test.press(KeyCode::Home);
         assert_eq!(test.dashboard.selected, ip(0));
 
@@ -1551,10 +1549,10 @@ mod tests {
         };
         let mut test = Test::new(10, false, view, &three_clients());
         let screen = test.draw();
-        assert!(screen[2].contains("REQS▲"));
-        assert!(!screen[2].contains("HOST"));
-        assert!(screen[2].contains("UA"));
-        assert!(screen[3].contains("curl/8.9.1"));
+        assert!(screen[1].contains("REQS▲"));
+        assert!(!screen[1].contains("HOST"));
+        assert!(screen[1].contains("UA"));
+        assert!(screen[2].contains("curl/8.9.1"));
         assert_eq!(test.order(), [C, A, B]);
 
         test.press(KeyCode::F(3));
@@ -1575,17 +1573,17 @@ mod tests {
     #[test]
     fn showing_and_hiding_columns() {
         let mut test = Test::new(10, false, View::default(), &three_clients());
-        let has_ua = |screen: &[String]| screen[2].contains("UA") && screen[3].contains("curl");
+        let has_ua = |screen: &[String]| screen[1].contains("UA") && screen[2].contains("curl");
         assert!(!has_ua(&test.draw()));
-        assert!(test.draw()[2].contains("HOST"));
+        assert!(test.draw()[1].contains("HOST"));
         test.press(KeyCode::F(2));
         assert!(has_ua(&test.draw()));
         test.press(KeyCode::Char('u'));
         assert!(!has_ua(&test.draw()));
         test.press(KeyCode::F(3));
-        assert!(!test.draw()[2].contains("HOST"));
+        assert!(!test.draw()[1].contains("HOST"));
         test.press(KeyCode::Char('h'));
-        assert!(test.draw()[2].contains("HOST"));
+        assert!(test.draw()[1].contains("HOST"));
     }
 
     fn row(ip: IpAddr, host: Host) -> Row {
@@ -1662,20 +1660,20 @@ mod tests {
         snapshot.view.show_ua = true;
         let screen = draw_snapshot(&snapshot, 160, 8);
         assert!(
-            screen[4].contains(&format!("{long}  curl/8.9.1")),
+            screen[3].contains(&format!("{long}  curl/8.9.1")),
             "{screen:?}"
         );
         // The UA column starts after the longest name in every row, and names are right-aligned
-        assert_eq!(screen[3].find("curl"), screen[4].find("curl"), "{screen:?}");
+        assert_eq!(screen[2].find("curl"), screen[3].find("curl"), "{screen:?}");
         assert!(
-            screen[3].contains(" a.example.com  curl/8.9.1"),
+            screen[2].contains(" a.example.com  curl/8.9.1"),
             "{screen:?}"
         );
 
         // On a narrow screen, the name keeps its end and fills the rest of the row
         let screen = draw_snapshot(&snapshot, 100, 8);
-        assert!(screen[4].ends_with("xxxx.example.com"), "{screen:?}");
-        assert!(screen[4].contains("  …x"), "{screen:?}");
+        assert!(screen[3].ends_with("xxxx.example.com"), "{screen:?}");
+        assert!(screen[3].contains("  …x"), "{screen:?}");
         assert_eq!(shorten_host("abcdef", 4), "…def");
         assert_eq!(shorten_host("abcd", 4), "abcd");
     }
