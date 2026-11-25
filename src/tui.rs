@@ -49,6 +49,8 @@ const LABEL_WIDTH: usize = 6;
 const BAR_VALUE: Color = Color::Indexed(255);
 /// The color of the words between the values.
 const BAR_WORD: Color = Color::Indexed(250);
+/// The background of the complete part: blue.
+const BAR_COMPLETE: Color = Color::Indexed(25);
 /// The background of the complete part while the server is paused: dark yellow.
 const BAR_PAUSED: Color = Color::Indexed(94);
 /// The background of the complete part when the server is done: green.
@@ -582,7 +584,7 @@ impl Dashboard {
             let share = u128::from(snapshot.position) * width / u128::from(snapshot.total);
             complete = u16::try_from(share.min(width)).expect("at most the width");
         }
-        let mut color = Color::Blue;
+        let mut color = BAR_COMPLETE;
         if snapshot.paused {
             color = BAR_PAUSED;
         }
@@ -1793,12 +1795,12 @@ mod tests {
         let text = "33.3%  1 / 3   ETA 2m   1 items/min   1 req/min   2 IPs   0 blocked";
         let screen = test.draw();
         assert_eq!(screen[8], centered(text));
-        assert_eq!(backgrounds(&test), [(Color::Blue, 33), (BAR_REST, 67)]);
+        assert_eq!(backgrounds(&test), [(BAR_COMPLETE, 33), (BAR_REST, 67)]);
         let buffer = test.terminal.backend().buffer();
         let (x, _) = find(&screen[8..9], "33.3%");
         assert_eq!(buffer[(x, 8)].fg, BAR_VALUE);
         let (x, _) = find(&screen[8..9], "ETA 2m");
-        assert_eq!(buffer[(x, 8)].bg, Color::Blue);
+        assert_eq!(buffer[(x, 8)].bg, BAR_COMPLETE);
         assert_eq!(buffer[(x, 8)].fg, BAR_WORD);
         assert_eq!(buffer[(x + 2, 8)].bg, BAR_REST);
         assert_eq!(buffer[(x + 2, 8)].fg, BAR_WORD);
