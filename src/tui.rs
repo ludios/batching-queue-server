@@ -1316,8 +1316,8 @@ mod tests {
             ]
         );
 
-        // In the progress bar, the values are bold and white, and the words between them are
-        // light gray
+        // The name is not bold. In the progress bar, the values are bold and white, and the
+        // words between them are light gray.
         let buffer = test.terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].modifier, Modifier::empty());
         let (x, _) = find(&screen[8..9], "1,000 items/min");
@@ -1734,11 +1734,14 @@ mod tests {
         assert!(!test.shared.state.lock().unwrap().is_paused());
         assert!(test.draw()[8].trim_start().starts_with("0.0%"));
 
-        // A click on a key bar label does what its key does
+        // A click on a key name, on its label, or on the label's padding does what the key does
         test.click_text(12, "F5Pause");
         assert!(test.shared.state.lock().unwrap().is_paused());
         test.click_text(12, "Resume");
         assert!(!test.shared.state.lock().unwrap().is_paused());
+        let (x, _) = find(&test.draw()[12..], "F5Pause F6");
+        test.click(x + 7, 12);
+        assert!(test.shared.state.lock().unwrap().is_paused());
     }
 
     #[test]
@@ -1814,16 +1817,21 @@ mod tests {
         assert_eq!(backgrounds(&test), paused);
         assert_eq!(title(&test), "PAUSED 33.3% items.txt");
 
-        // When the server is done, the whole row is complete, except for `PAUSED`
+        // When the server is done, the whole row is complete. `PAUSED` and a count of blocked
+        // IPs above 0 keep their colors in the complete part.
         test.shared.state.lock().unwrap().take(A, 2).unwrap();
-        let text = " PAUSED  100.0%  3 / 3   DONE   1 items/min   1 req/min   2 IPs   0 blocked";
+        test.shared.state.lock().unwrap().set_blocked(B, true);
+        let text = " PAUSED  100.0%  3 / 3   DONE   1 items/min   1 req/min   2 IPs    1 blocked ";
         let screen = test.draw();
         assert_eq!(screen[8], centered(text));
-        let (x, _) = find(&screen[8..9], "PAUSED");
+        let (paused, _) = find(&screen[8..9], "PAUSED");
+        let (blocked, _) = find(&screen[8..9], "1 blocked");
         let done = [
-            (BAR_DONE, x - 1),
+            (BAR_DONE, paused - 1),
             (Color::Yellow, 8),
-            (BAR_DONE, 100 - 8 - (x - 1)),
+            (BAR_DONE, blocked - paused - 8),
+            (Color::Red, 11),
+            (BAR_DONE, 100 - 10 - blocked),
         ];
         assert_eq!(backgrounds(&test), done);
         assert_eq!(title(&test), "DONE items.txt");
