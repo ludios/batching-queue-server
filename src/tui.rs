@@ -43,20 +43,24 @@ const GAP: u16 = 2;
 /// The screen columns that each label of the key bar takes, as in htop.
 const LABEL_WIDTH: usize = 6;
 
-// The colors of the progress bar that are entries of the 256-color palette. Color schemes
-// usually change only the colors 0 to 15.
-/// The color of the values.
+// The colors that are entries of the 256-color palette. Color schemes usually change only the
+// colors 0 to 15.
+/// The color of the values in the progress bar.
 const BAR_VALUE: Color = Color::Indexed(255);
-/// The color of the words between the values.
+/// The color of the words between the values in the progress bar.
 const BAR_WORD: Color = Color::Indexed(250);
-/// The background of the complete part: blue.
+/// The background of the progress bar's complete part: blue.
 const BAR_COMPLETE: Color = Color::Indexed(25);
-/// The background of the complete part while the server is paused: dark yellow.
+/// The background of the progress bar's complete part while the server is paused: dark yellow.
 const BAR_PAUSED: Color = Color::Indexed(94);
-/// The background of the complete part when the server is done: green.
+/// The background of the progress bar's complete part when the server is done: green.
 const BAR_DONE: Color = Color::Indexed(28);
-/// The background of the part that is not complete: dark gray.
+/// The background of the part of the progress bar that is not complete: dark gray.
 const BAR_REST: Color = Color::Indexed(238);
+/// The background of the selected row of the clients table: gray.
+const SELECTED: Color = Color::Indexed(240);
+/// The color of the text in the selected row of the clients table.
+const SELECTED_TEXT: Color = Color::Indexed(255);
 
 /// The rows that one turn of the mouse wheel moves the selection by.
 const WHEEL_ROWS: isize = 3;
@@ -650,12 +654,12 @@ impl Dashboard {
                 style = style.fg(Color::Red);
             }
             if Some(row.ip) == self.selected {
-                // Black on cyan as in htop, or on the red of a blocked client
-                let mut color = Color::Cyan;
+                // A gray background, as the cursor line of tig has. Red text is hard to read on
+                // gray, so the row of a blocked client is black on red.
+                style = Style::new().fg(SELECTED_TEXT).bg(SELECTED);
                 if row.client.blocked {
-                    color = Color::Red;
+                    style = black_on(Color::Red);
                 }
-                style = black_on(color);
             }
             buf.set_style(Rect::new(area.x, y, area.width, 1), style);
             for placed in &columns {
@@ -1476,7 +1480,7 @@ mod tests {
         assert!(!test.is_blocked(A) && !test.is_blocked(C));
         assert_eq!(test.order(), [B, A, C]);
 
-        // The selected row of a blocked client is red in reverse video, not cyan
+        // The selected row of a blocked client is red in reverse video, not white on gray
         let (_, b_y) = find(&test.draw(), "198.51.100.9");
         let cell = &test.terminal.backend().buffer()[(0, b_y)];
         assert!(cell.modifier.contains(Modifier::REVERSED));
@@ -1518,11 +1522,10 @@ mod tests {
         assert_eq!(test.dashboard.selected, Some(B));
         let buffer = test.terminal.backend().buffer();
         for x in [20, 99] {
-            assert!(buffer[(x, 4)].modifier.contains(Modifier::REVERSED));
-            assert_eq!(buffer[(x, 4)].fg, Color::Cyan);
-            assert_eq!(buffer[(x, 4)].bg, Color::Black);
+            assert_eq!(buffer[(x, 4)].fg, SELECTED_TEXT);
+            assert_eq!(buffer[(x, 4)].bg, SELECTED);
         }
-        assert!(!buffer[(20, 2)].modifier.contains(Modifier::REVERSED));
+        assert_eq!(buffer[(20, 2)].bg, Color::Reset);
     }
 
     #[test]
