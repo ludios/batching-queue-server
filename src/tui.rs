@@ -674,18 +674,14 @@ impl Dashboard {
         self.drawn.header_y = Some(area.y);
 
         for (y, row) in (area.y + 1..area.bottom()).zip(rows.iter().skip(self.scroll)) {
-            let mut style = Style::new();
-            if row.client.blocked {
-                style = style.fg(Color::Red);
-            }
-            if Some(row.ip) == self.selected {
-                // A gray background, as the cursor line of tig has. Red text is hard to read on
-                // gray, so the row of a blocked client is black on red.
-                style = Style::new().fg(SELECTED_TEXT).bg(SELECTED);
-                if row.client.blocked {
-                    style = black_on(Color::Red);
-                }
-            }
+            // Red text is hard to read on gray, so the selected row of a blocked client is black
+            // on red
+            let style = match (Some(row.ip) == self.selected, row.client.blocked) {
+                (false, false) => Style::new(),
+                (false, true) => Style::new().fg(Color::Red),
+                (true, false) => Style::new().fg(SELECTED_TEXT).bg(SELECTED),
+                (true, true) => black_on(Color::Red),
+            };
             buf.set_style(Rect::new(area.x, y, area.width, 1), style);
             for placed in &columns {
                 let mut text = cell(placed.column, row, now);
