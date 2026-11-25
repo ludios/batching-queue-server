@@ -1829,6 +1829,14 @@ mod tests {
     }
 
     #[test]
+    fn a_narrow_name_line() {
+        let snapshot = snapshot_with(Vec::new());
+        assert_eq!(draw_snapshot(&snapshot, 12, 1), ["items :31417"]);
+        assert_eq!(draw_snapshot(&snapshot, 6, 1), [":31417"]);
+        assert_eq!(draw_snapshot(&snapshot, 5, 1), ["items"]);
+    }
+
+    #[test]
     fn an_empty_item_file() {
         for cycle in [false, true] {
             let mut test = Test::new(0, cycle, View::default(), &[]);
