@@ -647,13 +647,12 @@ impl Dashboard {
                 style = style.fg(Color::Red);
             }
             if Some(row.ip) == self.selected {
-                // Reverse video of cyan (or the red of a blocked client) on black, which shows
-                // black on cyan as in htop (or black on red). With colors turned off (`NO_COLOR`),
-                // the row is still in reverse video.
-                if !row.client.blocked {
-                    style = style.fg(Color::Cyan);
+                // Black on cyan as in htop, or on the red of a blocked client
+                let mut color = Color::Cyan;
+                if row.client.blocked {
+                    color = Color::Red;
                 }
-                style = style.bg(Color::Black).add_modifier(Modifier::REVERSED);
+                style = black_on(color);
             }
             buf.set_style(Rect::new(area.x, y, area.width, 1), style);
             for placed in &columns {
