@@ -98,7 +98,7 @@ The state file holds everything that survives a restart: the position, the wrap 
 
 - `position` is the number of lines already handed out in the current pass over the item file, which is also the 0-based index of the next line to hand out.
 - `wraps` counts how many times the server has started again at the first line.
-- `clients` has one record for each IP address that has ever made a request, whatever the reply was. `items` is the number of lines handed to that IP address, and `user_agent` is the `User-Agent` of its most recent request that had one, or `null`. `host` is the reverse DNS name that a lookup found (see "Reverse DNS names"), or `null`.
+- `clients` has one record for each IP address that has ever made a request, whatever the reply was. `items` is the number of lines handed to that IP address, and `user_agent` is the `User-Agent` of its most recent request that had one, or `null`. `host` is the reverse DNS name that a lookup found, or `null`; set it to `null` to have the client looked up again.
 - `view` holds the dashboard's sort column (one of `blocked`, `ip`, `items`, `first_seen`, `last_seen`, `requests`, `host`), whether the sort direction is inverted, and whether the `HOST` and `UA` columns are shown. It may be left out, and then the values shown above apply.
 
 If the state file does not exist, the server starts at position 0 and creates it. So check the path if a restarted server reports that it created the state file: a mistyped `--state-file`, or an item file that was moved or renamed (which moves the default state file path), makes the server start again at line 0 without its block list. A state file that exists but cannot be read, or that is not exactly in this form, is a startup error, and so is a `position` greater than the number of lines in the item file.
@@ -136,7 +136,7 @@ F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
 From top to bottom:
 
 1. The status line: the item file name, the port, the position and the number of lines in the file, the percent done, the estimated time until the end of the pass at the rate of the last minute (or `DONE` when cycling is off and every line has been handed out), the lines handed out and the requests in the last minute, the wrap counter (with `--cycle` only), and the number of client IP addresses and how many of them are blocked. While the server is paused, the line starts with `PAUSED`.
-2. The clients table, one row per client IP address. `FIRST` and `LAST` are the times since the first and the most recent request. `HOST` is the reverse DNS name (see "Reverse DNS names"). `UA` is the most recent `User-Agent`; this column is hidden unless the operator has chosen to show it. Rows of blocked IP addresses are drawn in red. The selected row is black on cyan, or black on red if its client is blocked.
+2. The clients table, one row per client IP address. `FIRST` and `LAST` are the times since the first and the most recent request. `HOST` is the reverse DNS name (the `PTR` record) of the client IP address, as a hint about who the client is: `-` if its lookup in this run didn't find a name, and empty while the client doesn't have a name and its lookup in this run hasn't finished. `UA` is the most recent `User-Agent`; this column is hidden unless the operator has chosen to show it. Rows of blocked IP addresses are drawn in red. The selected row is black on cyan, or black on red if its client is blocked.
 3. The events pane: the most recent requests, newest at the bottom, each with its time, its client, and its outcome (the number of lines handed out, `blocked`, `wrong path`, `paused`, or `rejected` with the status code).
 4. The key bar.
 
@@ -163,18 +163,7 @@ A click on `allowed` or `blocked` in a row that is not selected only selects tha
 
 Quitting the dashboard stops the server. The sort column, the sort direction, and which of `HOST` and `UA` are shown are kept in the state file.
 
-### Reverse DNS names
-
-The `HOST` column shows the reverse DNS name (the `PTR` record) of each client IP address, as a hint about who the client is.
-
-- A client without a name is looked up in the background at its first request in each run of the server, and not again in that run. At most 8 lookups run at the same time, and each is given up 5 seconds after it began running.
-- A name that a lookup found is saved in the state file. So the dashboard shows it from the start of the next run, and the client is never looked up again. To have a saved name looked up again, stop the server, set the client's `host` to `null` in the state file, and start the server again.
-- An empty `HOST` cell means that the client doesn't have a name and that its lookup has not started or not finished yet in this run; `-` means that its lookup in this run didn't find a name, failed, or was given up.
-- The `HOST` column is as wide as its longest name, so a long name leaves less room for `UA`, or none. A name longer than the rest of the row is shown as `…` followed by its end, because the domain is at the end.
-- The names are not verified. Nothing checks that a name resolves back to the IP address, so the owner of an address can publish any name for it.
-- The lookups send the client IP addresses to the DNS resolver that the system is configured with (`/etc/resolv.conf`), also while the `HOST` column is hidden.
-- Names are shown in ASCII: an internationalized label as `xn--…`, and an unusual character escaped with `\` (for example `\[` for `[`, and `\033`, in octal, for ESC).
-- Without a dashboard, the server doesn't do any lookups.
+The reverse DNS names are not verified: the owner of an IP address can publish any name for it. The server looks names up only while it shows the dashboard (also while the `HOST` column is hidden), and each lookup sends a client IP address to the system's DNS resolver (`/etc/resolv.conf`).
 
 ## Exiting
 
