@@ -43,8 +43,8 @@ const GAP: u16 = 2;
 /// The screen columns that each label of the key bar takes, as in htop.
 const LABEL_WIDTH: usize = 6;
 
-// The colors of the progress bar that are entries of the 256-color palette. Unlike the colors 0
-// to 15, they don't change with the terminal's color scheme.
+// The colors of the progress bar that are entries of the 256-color palette. Color schemes
+// usually change only the colors 0 to 15.
 /// The color of the values.
 const BAR_VALUE: Color = Color::Indexed(255);
 /// The color of the words between the values.
@@ -494,7 +494,7 @@ impl Dashboard {
 
     /// Draws the name line on the top row of `area` of `buf`: the item file's name at the left
     /// end and the port at the right end. If the two don't fit with a space between them, the
-    /// name is cut off. If the row is narrower than the port, only the name is drawn.
+    /// name is cut off. If the row is narrower than `:` and the port, only the name is drawn.
     fn draw_name_line(&self, buf: &mut Buffer, area: Rect) {
         let port = format!(":{}", self.config.port);
         let port_width = u16::try_from(port.len()).expect("`:` and at most 5 digits");
@@ -708,7 +708,7 @@ impl Dashboard {
             (KeyCode::F(10), "F10", "Quit"),
         ];
         // As in htop: the key names in the terminal's colors, the rest of the row black on cyan,
-        // and each label directly after its key name, in a field of the same width
+        // and each label directly after its key name, padded to `LABEL_WIDTH` columns
         buf.set_style(
             Rect::new(area.x, y, area.width, 1),
             Style::new().fg(Color::Black).bg(Color::Cyan),
@@ -718,6 +718,10 @@ impl Dashboard {
         for (key, key_name, label) in labels {
             let start = x;
             x = buf.set_stringn(x, y, key_name, width, key_style).0;
+            assert!(
+                label.len() <= LABEL_WIDTH,
+                "{label} would touch the next key name"
+            );
             let label = format!("{label:LABEL_WIDTH$}");
             x = buf.set_stringn(x, y, label, width, Style::new()).0;
             self.drawn.labels.push((start..x, key));

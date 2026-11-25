@@ -158,7 +158,7 @@ The terminal window's title shows the state too: `12.5% items.txt`, `PAUSED 12.5
 | `F5` or `p` | Pause or resume handing out lines. A paused server answers as if it didn't have any lines left, so clients just wait. |
 | `F10` or `q` | Ask whether to quit: `y` or `Ctrl-C` quits, and any other key cancels. |
 | `Ctrl-C` | Quit at once. |
-| Left click on a key-bar label | Same as that key. |
+| Left click on a key name in the key bar, or on the 6 columns after it that hold its label | Same as that key. |
 
 A click on `allowed` or `blocked` in a row that is not selected only selects that client. The rows re-sort several times per second, so another client may have moved under the pointer just before the click.
 

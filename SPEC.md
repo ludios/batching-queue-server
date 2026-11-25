@@ -322,7 +322,7 @@ F2UA    F3Host  F5Pause F6Sort  F7InvertF9Block F10Quit
 
 The whole progress bar has a background, in two parts. The complete part is at the left end: the number of its columns is the number of the row's columns, multiplied by the position, divided by the total number of lines, rounded down. For an item file without lines, the complete part doesn't have any columns (but see below for cycling off). The background of the complete part is blue. While the server is paused, it is dark yellow (color 94 of the 256-color palette) instead. When cycling is off and the position equals the total number of lines, the complete part is the whole row instead, in green (color 28); this also applies while the server is paused, and to an item file without lines. The background of the rest of the row is dark gray (color 238).
 
-The text is drawn on top of both parts, in the same colors on both: the values are bold and white (color 255), and the words between the values are light gray (color 250). A count of blocked IPs of 0 is drawn like a word, together with `blocked`. A count of blocked IPs above 0 is black on red, together with `blocked` and one space on each side. `PAUSED` is black on yellow, with one space on each side. The numbered colors are used because, unlike the first 16 colors, they don't change with the terminal's color scheme. While the server is paused, the key bar shows `F5Resume` in place of `F5Pause`.
+The text is drawn on top of both parts, in the same colors on both: the values are bold and white (color 255), and the words between the values are light gray (color 250). A count of blocked IPs of 0 is drawn like a word, together with `blocked`. A count of blocked IPs above 0 is black on red, together with `blocked` and one space on each side. `PAUSED` is black on yellow, with one space on each side. The numbered colors are used because color schemes usually change only the first 16 colors. While the server is paused, the key bar shows `F5Resume` in place of `F5Pause`.
 
 Let R be the number of rows between the name line and the key bar, less the progress bar. The events pane gets R / 3 rows, rounded down; the clients table, including its header row, gets the rest.
 
@@ -395,7 +395,7 @@ Each row: local time as `HH:MM:SS`, client IP, outcome. The outcome is the numbe
 | `F5` or `p` | Pause the server, or resume it. |
 | `F10` or `q` | Ask "Quit the server? y/n" in the key bar. `y` quits; any other key cancels. |
 | `Ctrl-C` | Quit immediately, also while the quit question is shown. |
-| Left click on a key-bar label | Same as that key. |
+| Left click on a key name in the key bar, or on the 6 columns after it that hold its label | Same as that key. |
 
 Every function key has a letter alternative because terminal emulators often keep some function keys for themselves. The keys that move the selection react to key presses and key repeats. Every other key reacts to key presses only, so that a held key does not block and unblock, or pause and resume, over and over. No key reacts to a key release. React only to the press of the left mouse button and to the wheel; ignore drags, releases, and movement.
 
