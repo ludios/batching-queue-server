@@ -42,7 +42,7 @@ Two servers that serve the same item file need different state files, so give at
 
 - A line is a sequence of bytes, possibly empty, ended by `\n`. The last line doesn't need to end with `\n`. A `\r` before the `\n` is part of the line.
 - Each line is sent exactly as it is in the file, whatever its bytes, followed by `\n`.
-- Do not change the item file in place while the server runs. To replace it, rename a new file over it. With `--cycle`, the server opens the path again at each wrap, so it serves the new file from the next pass on. A server that doesn't cycle, or whose old file is empty and so never wraps, serves the new file only after a restart.
+- Do not change the item file in place while the server runs. To replace it, rename a new file over it. With `--cycle`, the server opens the path again at each wrap, so it serves the new file from the next pass on. A server that doesn't cycle, or whose old file is empty and so never wraps, serves the new file only after a restart, which applies the saved position to it (see "The state file").
 - At startup and at each wrap, the server reads the whole file once to count its lines. For a very large file, this takes seconds, and the server doesn't serve any request in that time.
 
 ## HTTP contract
@@ -64,7 +64,7 @@ For each request, the first row that applies decides the reply:
 - The path is compared with `--path` byte for byte, as received, without URL-decoding or case folding: `/secret/` is not `/secret`.
 - A wrong path gets exactly the reply that a blocked client gets, so that a stranger cannot tell the two apart.
 - The client's IP address is the remote address of the TCP connection, and an IPv4-mapped IPv6 address (`::ffff:203.0.113.7`) counts as the IPv4 address (`203.0.113.7`). Headers such as `X-Forwarded-For` are ignored.
-- With `--cycle`, the request that asks for more lines than are left gets the lines that are left, possibly none (then as an empty `200` after 1 second), and the next request gets the first line. So with `--cycle`, an empty reply doesn't mean that the queue is done.
+- With `--cycle`, a request whose `max`, lowered to `--max-batch`, is more than the number of lines left gets the lines that are left, possibly none (then as an empty `200` after 1 second), and the next line handed out is the first line. So with `--cycle`, an empty reply doesn't mean that the queue is done.
 - The server counts a line as handed out when it reads the line for a response, not when the client has received it. A client that disconnects early loses its lines; with `--cycle`, they are handed out again in the next pass.
 
 ## The state file
