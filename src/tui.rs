@@ -112,7 +112,7 @@ fn is_sortable(column: Column) -> bool {
 fn is_right_aligned(column: Column) -> bool {
     matches!(
         column,
-        Column::Items | Column::First | Column::Last | Column::Reqs
+        Column::Items | Column::First | Column::Last | Column::Reqs | Column::Host
     )
 }
 
@@ -1217,7 +1217,7 @@ mod tests {
             [
                 "items.txt :31417  0/10 0.0%  ETA 0s  1,000 items/min  2 req/min  wrap 0  3 IPs, 1 blocked",
                 "",
-                "         IP            ITEMS▼   FIRST   LAST   REQS  HOST",
+                "         IP            ITEMS▼   FIRST   LAST   REQS   HOST",
                 "allowed  203.0.113.7   12,400      3d     2s    124",
                 "blocked  198.51.100.9     300      3d     2s  1,215",
                 "allowed  2001:db8::17       0      3d     2s      1",
@@ -1603,8 +1603,12 @@ mod tests {
             screen[4].contains(&format!("{long}  curl/8.9.1")),
             "{screen:?}"
         );
-        // The UA column starts after the longest name in every row
+        // The UA column starts after the longest name in every row, and names are right-aligned
         assert_eq!(screen[3].find("curl"), screen[4].find("curl"), "{screen:?}");
+        assert!(
+            screen[3].contains(" a.example.com  curl/8.9.1"),
+            "{screen:?}"
+        );
 
         // On a narrow screen, the name keeps its end and fills the rest of the row
         let screen = draw_snapshot(&snapshot, 100, 8);

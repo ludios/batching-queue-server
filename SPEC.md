@@ -296,10 +296,10 @@ From top to bottom. The numbers are examples, from a server started with `--cycl
 ```
 items.txt :31417  1,234,567/9,876,536 12.5%  ETA 14d  412 items/min  38 req/min  wrap 3  3 IPs, 1 blocked
 
-         IP            ITEMS▼   FIRST   LAST   REQS  HOST
+         IP            ITEMS▼   FIRST   LAST   REQS                   HOST
 allowed  203.0.113.7   12,400      3d     2s    124  crawler-7.example.net
-blocked  198.51.100.9     300      1h     0s  1,215  -
-allowed  2001:db8::17       0      5m     5m      1  scanner.example.org
+blocked  198.51.100.9     300      1h     0s  1,215                      -
+allowed  2001:db8::17       0      5m     5m      1    scanner.example.org
 ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
@@ -341,7 +341,7 @@ Columns, left to right:
 | `HOST` | the reverse DNS name; `-` when its lookup in this run didn't find a name; empty while the client doesn't have a name and its lookup in this run has not finished | the whole name (not the shortened form on screen), ignoring case, compared label by label from the last label to the first: `host.example.com` compares as the list `com`, `example`, `host`. So clients of one domain are adjacent. Compare lists, not joined strings, because `-` sorts before `.`. Clients without a name are equal to each other and come after all clients with a name, in both directions. | ascending |
 | `UA` | `user_agent`, or `-` | not sortable | |
 
-- At startup, the `HOST` column is shown unless the saved view settings say otherwise. It can be hidden and shown again with a key. Its width is that of the longest name in it, but at least that of its header with the sort arrow. If the rest of the screen width is less, the column gets only that rest, and the `UA` column gets nothing. A name longer than the column is shown as `…` followed by its end, because the domain is at the end.
+- At startup, the `HOST` column is shown unless the saved view settings say otherwise. It can be hidden and shown again with a key. Its width is that of the longest name in it, but at least that of its header with the sort arrow. If the rest of the screen width is less, the column gets only that rest, and the `UA` column gets nothing. Names are right-aligned, so that their domains line up. A name longer than the column is shown as `…` followed by its end, because the domain is at the end.
 - At startup, the `UA` column is hidden unless the saved view settings say otherwise. It can be shown and hidden again with a key. When shown, it takes the remaining width and is truncated.
 - A hidden column cannot become the sort column. If the sort column gets hidden, the rows stay sorted by it in the same direction, and no header carries `▼` or `▲`. `F6` then moves on to the next shown sortable column to the right of it, wrapping around.
 - Ages show only their largest unit: `42s`, `17m`, `5h` (below 48 hours), `12d`.
@@ -494,7 +494,7 @@ Required, at minimum:
 - The selection stays on the same IP when the rows re-sort.
 - A dashboard started from saved view settings shows that sort column, that direction, and those columns, with the rows in that order, also when the saved sort column is hidden; changing them changes what the next save writes.
 - `F2` shows and hides the `UA` column; `F3` shows and hides the `HOST` column.
-- Sorting by `HOST` puts `b.example.com` next to `a.example.com` and before `a.example.net`, keeps `a.foo-bar.com` and `b.foo-bar.com` adjacent although `c.foo.com` exists, and puts clients without a name last in both directions. The `HOST` cell is `-` for a client looked up without a name and empty for a client without a name that has not been looked up. A name of 72 characters is shown whole on a wide screen, with the `UA` column after it in every row; on a narrower screen it shows its end.
+- Sorting by `HOST` puts `b.example.com` next to `a.example.com` and before `a.example.net`, keeps `a.foo-bar.com` and `b.foo-bar.com` adjacent although `c.foo.com` exists, and puts clients without a name last in both directions. The `HOST` cell is `-` for a client looked up without a name and empty for a client without a name that has not been looked up. A name of 72 characters is shown whole on a wide screen, with the `UA` column after it in every row and a shorter name right-aligned to its end; on a narrower screen it shows its end.
 - `F5` pauses and resumes; while paused, the status line starts with `PAUSED` and the key bar shows `F5 Resume`.
 - The status line shows the number of client IPs and of blocked ones, and shows `DONE` when cycling is off and the position is at the end of the file.
 - The title text for each row of the "Terminal title" table, and for an item file without lines.
