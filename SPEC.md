@@ -302,7 +302,7 @@ allowed  2001:db8::17       0      5m     5m      1    scanner.example.org
  12.5%  1,234,567 / 9,876,536   ETA 14d   412 items/min   38 req/min   wrap 3   3 IPs    1 blocked  ─────
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
-F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
+F2UA    F3Host  F5Pause F6Sort  F7InvertF9Block F10Quit
 ```
 
 1. **Name line** (1 row): the item file name without its directory at the left end, and `:` followed by the port at the right end. If the window is too narrow for both with a space between them, the name is cut off. If the window is narrower than `:` and the port, only the name is drawn.
@@ -318,11 +318,11 @@ F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
    - number of known client IPs
    - how many of them are blocked
 4. **Events pane**: the most recent events, newest at the bottom, as many as fit.
-5. **Key bar** (1 row). As in `htop`, the key names are in the terminal's colors and the rest of the row is black on cyan.
+5. **Key bar** (1 row). As in `htop`, each key name is directly followed by its label, each label is padded with spaces to 6 columns, the key names are in the terminal's colors, and the rest of the row is black on cyan.
 
 The progress bar is filled from its left end: of its columns, the share that is filled is the position divided by the total number of lines, rounded down to whole columns. For an item file without lines, no column is filled. The text is drawn on top of the fill. To the right of both the text and the fill, the row is a rule of `─` (U+2500).
 
-Outside the fill, the percent and the estimate (or `DONE`) are bold, the other values are in the terminal's colors, and the words between the values and the rule are dim (not dark gray, which some palettes make the background color), so that the two values read most often stand out. The fill is black on the terminal's foreground color, or black on yellow while the server is paused, or black on green when cycling is off and the position equals the total number of lines (also while the server is paused). Text in the fill is black, neither bold nor dim. `PAUSED` is black on yellow, and a count of blocked IPs above 0 is black on red; both keep these colors in the fill. Draw each of these as reverse video of the color on black, as for the selected row (see "Clients table"). While the server is paused, the key bar shows `F5 Resume` in place of `F5 Pause`.
+Outside the fill, the percent and the estimate (or `DONE`) are bold, the other values are in the terminal's colors, and the words between the values and the rule are dim (not dark gray, which some palettes make the background color), so that the two values read most often stand out. The fill is black on the terminal's foreground color, or black on yellow while the server is paused, or black on green when cycling is off and the position equals the total number of lines (also while the server is paused). Text in the fill is black, neither bold nor dim. `PAUSED` is black on yellow, and a count of blocked IPs above 0 is black on red; both keep these colors in the fill. Draw each of these as reverse video of the color on black, as for the selected row (see "Clients table"). While the server is paused, the key bar shows `F5Resume` in place of `F5Pause`.
 
 Let R be the number of rows between the name line and the key bar, less the progress bar. The events pane gets R / 3 rows, rounded down; the clients table, including its header row, gets the rest.
 
@@ -497,7 +497,7 @@ Required, at minimum:
 - A dashboard started from saved view settings shows that sort column, that direction, and those columns, with the rows in that order, also when the saved sort column is hidden; changing them changes what the next save writes.
 - `F2` shows and hides the `UA` column; `F3` shows and hides the `HOST` column.
 - Sorting by `HOST` puts `b.example.com` next to `a.example.com` and before `a.example.net`, keeps `a.foo-bar.com` and `b.foo-bar.com` adjacent although `c.foo.com` exists, and puts clients without a name last in both directions. The `HOST` cell is `-` for a client looked up without a name and empty for a client without a name that has not been looked up. A name of 72 characters is shown whole on a wide screen, with the `UA` column after it in every row and a shorter name right-aligned to its end; on a narrower screen it shows its end.
-- `F5` pauses and resumes; while paused, the text of the progress bar starts with `PAUSED` and the key bar shows `F5 Resume`.
+- `F5` pauses and resumes; while paused, the text of the progress bar starts with `PAUSED` and the key bar shows `F5Resume`.
 - The progress bar shows the number of client IPs and of blocked ones, and shows `DONE` when cycling is off and the position is at the end of the file. Its fill covers the share of the columns that the position is of the total, in the color of the server's state.
 - The title text for each row of the "Terminal title" table, and for an item file without lines.
 - Drawing works with an empty item file and with no clients.

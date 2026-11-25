@@ -41,6 +41,9 @@ const FRAME_INTERVAL: Duration = Duration::from_millis(200);
 /// The number of blank screen columns between two columns of the clients table.
 const GAP: u16 = 2;
 
+/// The screen columns that each label of the key bar takes, as in htop.
+const LABEL_WIDTH: usize = 6;
+
 /// The rows that one turn of the mouse wheel moves the selection by.
 const WHEEL_ROWS: isize = 3;
 
@@ -705,7 +708,8 @@ impl Dashboard {
             (KeyCode::F(9), "F9", "Block"),
             (KeyCode::F(10), "F10", "Quit"),
         ];
-        // As in htop: the key names in the terminal's colors, the rest of the row black on cyan
+        // As in htop: the key names in the terminal's colors, the rest of the row black on cyan,
+        // and each label directly after its key name, in a field of the same width
         buf.set_style(
             Rect::new(area.x, y, area.width, 1),
             Style::new().fg(Color::Black).bg(Color::Cyan),
@@ -715,11 +719,9 @@ impl Dashboard {
         for (key, key_name, label) in labels {
             let start = x;
             x = buf.set_stringn(x, y, key_name, width, key_style).0;
-            x = buf
-                .set_stringn(x.saturating_add(1), y, label, width, Style::new())
-                .0;
+            let label = format!("{label:LABEL_WIDTH$}");
+            x = buf.set_stringn(x, y, label, width, Style::new()).0;
             self.drawn.labels.push((start..x, key));
-            x = x.saturating_add(GAP);
         }
     }
 
@@ -1283,7 +1285,7 @@ mod tests {
                 "",
                 "11:59:59 203.0.113.7   1,000",
                 "11:59:59 198.51.100.9  blocked",
-                "F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit",
+                "F2UA    F3Host  F5Pause F6Sort  F7InvertF9Block F10Quit",
             ]
         );
 
@@ -1309,10 +1311,11 @@ mod tests {
         assert_eq!(buffer[(x + 6, 1)].bg, Color::Green);
 
         // The key bar is cyan, but for its key names
-        let (x, _) = find(&screen[12..], "F2 UA");
-        assert_eq!(buffer[(x, 12)].bg, Color::Reset);
+        let (x, _) = find(&screen[12..], "F2UA    F3Host");
+        assert_eq!(buffer[(x + 1, 12)].bg, Color::Reset);
         assert_eq!(buffer[(x + 2, 12)].bg, Color::Cyan);
-        assert_eq!(buffer[(x + 3, 12)].bg, Color::Cyan);
+        assert_eq!(buffer[(x + 7, 12)].bg, Color::Cyan);
+        assert_eq!(buffer[(x + 8, 12)].bg, Color::Reset);
         assert_eq!(buffer[(99, 12)].bg, Color::Cyan);
     }
 
@@ -1682,12 +1685,12 @@ mod tests {
     fn pausing_and_resuming() {
         let mut test = Test::new(10, false, View::default(), &three_clients());
         let screen = test.draw();
-        assert!(screen[12].contains("F5 Pause"));
+        assert!(screen[12].contains("F5Pause"));
         test.press(KeyCode::F(5));
         assert!(test.shared.state.lock().unwrap().is_paused());
         let screen = test.draw();
         assert!(screen[8].starts_with(" PAUSED  0.0%"));
-        assert!(screen[12].contains("F5 Resume"));
+        assert!(screen[12].contains("F5Resume"));
         assert!(
             test.terminal.backend().buffer()[(0, 8)]
                 .modifier
@@ -1698,7 +1701,7 @@ mod tests {
         assert!(test.draw()[8].starts_with(" 0.0%"));
 
         // A click on a key bar label does what its key does
-        test.click_text(12, "F5 Pause");
+        test.click_text(12, "F5Pause");
         assert!(test.shared.state.lock().unwrap().is_paused());
         test.click_text(12, "Resume");
         assert!(!test.shared.state.lock().unwrap().is_paused());
@@ -1716,16 +1719,16 @@ mod tests {
         // Any other key cancels, and does nothing else
         assert!(!test.press(KeyCode::F(5)));
         assert!(!test.shared.state.lock().unwrap().is_paused());
-        assert!(test.draw()[12].starts_with("F2 UA"));
+        assert!(test.draw()[12].starts_with("F2UA"));
 
         assert!(!test.press(KeyCode::F(10)));
         let ctrl_y = Input::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
         assert!(!test.input(ctrl_y));
-        assert!(test.draw()[12].starts_with("F2 UA"));
+        assert!(test.draw()[12].starts_with("F2UA"));
         assert!(!test.press(KeyCode::F(10)));
         assert!(test.press(KeyCode::Char('y')));
         assert!(!test.press(KeyCode::Char('n')));
-        test.click_text(12, "F10 Quit");
+        test.click_text(12, "F10Quit");
         assert!(test.input(ctrl_c));
     }
 

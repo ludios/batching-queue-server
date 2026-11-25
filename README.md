@@ -130,7 +130,7 @@ allowed  2001:db8::17       0      5m     5m      1    scanner.example.org
  12.5%  1,234,567 / 9,876,536   ETA 14d   412 items/min   38 req/min   wrap 3   3 IPs    1 blocked  ─────
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
-F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
+F2UA    F3Host  F5Pause F6Sort  F7InvertF9Block F10Quit
 ```
 
 From top to bottom:
