@@ -572,8 +572,9 @@ impl Dashboard {
     /// Draws the progress bar of `snapshot` on screen row `y` of `area` of `buf`. The whole row
     /// has a background, in two parts. The complete part, at the left end, takes the share of
     /// the row that the position is of the total number of lines; it is blue, or dark yellow
-    /// while the server is paused, or green when the server is done. The rest of the row is dark
-    /// gray. The text is centered on top of both, in the same colors on both.
+    /// while the server is paused. When the server is done, also while it is paused, the
+    /// complete part is the whole row, in green. The rest of the row is dark gray. The text is
+    /// centered on top of both, in the same colors on both.
     fn draw_progress_bar(&self, buf: &mut Buffer, y: u16, area: Rect, snapshot: &Snapshot) {
         let mut complete = 0;
         if snapshot.total > 0 {
@@ -586,17 +587,13 @@ impl Dashboard {
             color = BAR_PAUSED;
         }
         if self.is_done(snapshot) {
+            // An item file without lines is done too
+            complete = area.width;
             color = BAR_DONE;
         }
-        let row = Rect::new(area.x, y, area.width, 1);
-        buf.set_style(row, Style::new().bg(BAR_REST));
-        buf.set_style(
-            Rect {
-                width: complete,
-                ..row
-            },
-            Style::new().bg(color),
-        );
+        let rest = Rect::new(area.x + complete, y, area.width - complete, 1);
+        buf.set_style(rest, Style::new().bg(BAR_REST));
+        buf.set_style(Rect::new(area.x, y, complete, 1), Style::new().bg(color));
 
         let text = self.progress(snapshot);
         let text_width = u16::try_from(text.width()).unwrap_or(u16::MAX);
@@ -1855,9 +1852,11 @@ mod tests {
                 assert_eq!(screen[8], centered(text));
                 assert_eq!(title, "DONE items.txt");
             }
-            // Without lines, no part of the progress bar is complete
+            // With cycling on, no part of the progress bar is complete; with cycling off, the
+            // server is done
             let buffer = test.terminal.backend().buffer();
-            assert_eq!(bar_backgrounds(buffer), [(BAR_REST, 100)]);
+            let color = if cycle { BAR_REST } else { BAR_DONE };
+            assert_eq!(bar_backgrounds(buffer), [(color, 100)]);
             assert_eq!(test.dashboard.selected, None);
             assert!(!test.press(KeyCode::F(9)));
             assert!(!test.press(KeyCode::End));
