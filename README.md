@@ -19,10 +19,10 @@ batching-queue-server [OPTIONS] ITEM_FILE
 | Option | Default | Meaning |
 |---|---|---|
 | `--state-file FILE` | the `ITEM_FILE` path with `.bqs.json` appended | The path of the state file (see "The state file"). For `/data/items.txt` the default is `/data/items.txt.bqs.json`. |
-| `--port PORT` | `31417` | Listen on this TCP port, on every IPv4 and IPv6 address. The system must support IPv6. |
-| `--cycle` | off | After handing out the last line of the file, start again at its first line. Without `--cycle`, the server stops handing out lines after the last one. |
+| `--port PORT` | `31417` | The TCP port that the server listens on, at every IPv4 and IPv6 address. The system must support IPv6. |
+| `--cycle` | off | After handing out the last line of the file, the server starts again at its first line. Without `--cycle`, the server stops handing out lines after the last one. |
 | `--max-batch N` | `10000` | The maximum number of lines in one response. Must be at least 1. |
-| `--path PATH` | `/` | The only path at which the server hands out lines; every other path gets `403`. It must start with `/` and consist of `/`, `A`–`Z`, `a`–`z`, `0`–`9`, `-`, `_`, `.`, and `~`, and none of its segments may be `.` or `..`. |
+| `--path PATH` | `/` | The only path at which the server hands out lines; every other path gets `403`. It must start with `/` and consist of `/`, `A` to `Z`, `a` to `z`, `0` to `9`, `-`, `_`, `.`, and `~`, and it must not have a segment that is `.` or `..`. |
 
 For example:
 
@@ -40,7 +40,7 @@ Two servers that serve the same item file need different state files, so give at
 
 ## The item file
 
-- A line is a sequence of bytes, possibly empty, ended by `\n`. The last line doesn't need to end with `\n`. A `\r` before the `\n` is part of the line.
+- A line is a sequence of bytes, possibly empty, ended by `\n`. If the file has bytes after its last `\n`, they are a line too. A `\r` before the `\n` is part of the line.
 - Each line is sent exactly as it is in the file, whatever its bytes, followed by `\n`.
 - Do not change the item file in place while the server runs. To replace it, rename a new file over it. With `--cycle`, the server opens the path again at each wrap, so it serves the new file from the next pass on. A server that doesn't cycle, or whose old file is empty and so never wraps, serves the new file only after a restart, which applies the saved position to it (see "The state file").
 - At startup and at each wrap, the server reads the whole file once to count its lines. For a very large file, this takes seconds, and the server doesn't serve any request in that time.
@@ -53,7 +53,7 @@ For each request, the first row that applies decides the reply:
 |---|---|---|---|---|
 | The client IP address is blocked | `403` | empty | 1 second | none |
 | The path is not exactly the `--path` value | `403` | empty | 1 second | none |
-| The method is anything but `GET`, including `HEAD` | `405`, with `Allow: GET` | empty | none | none |
+| The method is not `GET` (`HEAD` gets `405` too) | `405`, with `Allow: GET` | empty | none | none |
 | The `max` query parameter is invalid | `400` | one line saying what is wrong | none | none |
 | The server is paused | `200` | empty | 1 second | none |
 | There is at least one line to hand out | `200` | each line followed by `\n` | none | up to `max` |
@@ -61,7 +61,7 @@ For each request, the first row that applies decides the reply:
 
 - Every `200` and `400` reply has the header `Content-Type: text/plain`.
 - `max` is the most lines that the client wants, and it defaults to 1. After URL-decoding, it must consist of the digits `0` to `9` only, and its value must be from 1 to 18446744073709551615. A value above `--max-batch` is lowered to `--max-batch`. A repeated `max` is invalid. Other query parameters are ignored.
-- The path is compared with `--path` byte for byte, as received, without URL-decoding or case folding: `/secret/` is not `/secret`.
+- The path is compared with `--path` byte for byte, as received: without URL-decoding, without case folding, and without special treatment of a final `/` (`/secret/` is not `/secret`).
 - A wrong path gets exactly the reply that a blocked client gets, so that a stranger cannot tell the two apart.
 - The client's IP address is the remote address of the TCP connection, and an IPv4-mapped IPv6 address (`::ffff:203.0.113.7`) counts as the IPv4 address (`203.0.113.7`). Headers such as `X-Forwarded-For` are ignored.
 - With `--cycle`, a request whose `max`, lowered to `--max-batch`, is more than the number of lines left gets the lines that are left, possibly none (then as an empty `200` after 1 second), and the next line handed out is the first line. So with `--cycle`, an empty reply doesn't mean that the queue is done.
@@ -103,7 +103,7 @@ The state file holds everything that survives a restart: the position, the wrap 
 
 If the state file does not exist, the server starts at position 0 and creates it. So if a restarted server reports that it created the state file, check the path: a mistyped `--state-file` makes the server start again at line 0 without its block list, and so does moving or renaming the item file, which changes the default state file path. The server refuses to start if a state file exists but cannot be read, if it is not exactly in this form, or if its `position` is greater than the number of lines in the item file.
 
-Every 30 seconds, the server saves the state file if anything in it has changed. It also saves at once after a block, an unblock, or a wrap, and at every clean exit (see "Exiting"). A save never leaves a partly written state file. After a crash, a `kill -9`, or a power loss, the server starts again from the last save, so the lines handed out after that save are handed out a second time; normally, those are at most 30 seconds' worth of lines. No line is skipped.
+Every 30 seconds, the server saves the state file if anything in it has changed. It also saves at once after a block, an unblock, or a wrap, and at every clean exit (see "Exiting"). A save never leaves a partly written state file. After a crash, a `kill -9`, or a power loss, the server starts again from the last save, so the lines handed out after that save are handed out a second time; normally, those are at most about 30 seconds' worth of lines. No line is skipped.
 
 The pause, the events, and the rates are not saved.
 
@@ -116,7 +116,7 @@ The server locks a file whose path is the state file's path with `.lock` appende
 - The lock file is permanent. The server creates it, empty, if it is missing, and never deletes it.
 - The lock is never stale: the operating system releases it when the server's process ends, even by a crash or a `kill -9`. So an error that the state file is in use always means that a running process holds the lock.
 - Do not delete the lock file while a server runs: a second server could then start, and the two would overwrite each other's state file.
-- A symlink or a hard link to the state file under another name gets a different lock file, so two servers that use the two names can both start.
+- A symlink or a hard link to the state file under another name gets a different lock file, so the lock doesn't stop two servers that use the two names, and both hand out the same lines.
 - The lock is reliable only on a local filesystem.
 
 ## The dashboard
