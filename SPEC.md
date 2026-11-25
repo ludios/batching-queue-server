@@ -294,37 +294,40 @@ If both stdin and stdout are terminals, and the server is in the foreground proc
 From top to bottom. The numbers are examples, from a server started with `--cycle`.
 
 ```
-items.txt :31417  1,234,567/9,876,536 12.5%  ETA 14d  412 items/min  38 req/min  wrap 3  3 IPs, 1 blocked
+items.txt                                                                                          :31417
 
          IP            ITEMS▼   FIRST   LAST   REQS                   HOST
 allowed  203.0.113.7   12,400      3d     2s    124  crawler-7.example.net
 blocked  198.51.100.9     300      1h     0s  1,215                      -
 allowed  2001:db8::17       0      5m     5m      1    scanner.example.org
-─────────────────────────────────────────────────────────────────────────────────────────────────────────
+ 12.5%  1,234,567 / 9,876,536   ETA 14d   412 items/min   38 req/min   wrap 3   3 IPs    1 blocked  ─────
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
 F2 UA  F3 Host  F5 Pause  F6 Sort  F7 Invert  F9 Block  F10 Quit
 ```
 
-1. **Status line** (1 row), then a blank row. Its parts come in this order, most important first, because a narrow window cuts off the right end:
-   - item file name without its directory
-   - port
-   - position `/` total lines
-   - percent with one decimal, or `-` when the item file has no lines
-   - `ETA` and the estimated time until the end of the current pass: the remaining lines divided by the 60 second rate of lines handed out, shown in the same form as an age (see "Clients table"), or as `-` when that rate is 0. When cycling is off and the position equals the total number of lines, show `DONE` in place of `ETA` and the estimate.
-   - lines handed out in the last 60 seconds
-   - requests in the last 60 seconds
-   - wrap counter (omit when cycling is off)
-   - number of known client IPs, and how many of them are blocked
+1. **Name line** (1 row), then a blank row: the item file name without its directory at the left end, in bold, and `:` followed by the port at the right end. If the window is too narrow for both with a space between them, the name is cut off.
 2. **Clients table**: one header row, then one row per client.
-3. **Events pane**: a separator row of `─` (U+2500) across the full width, then the most recent events, newest at the bottom, as many as fit.
-4. **Key bar** (1 row). As in `htop`, the key names are in the terminal's colors and the rest of the row is black on cyan.
+3. **Progress bar** (1 row), which also separates the clients table from the events pane. Its text starts after one space. The parts of the text come in this order, most important first, because a narrow window cuts off the right end:
+   - `PAUSED`, only while the server is paused
+   - percent with one decimal, or `-` when the item file has no lines
+   - position ` / ` total lines
+   - `ETA` and the estimated time until the end of the current pass: the remaining lines divided by the 60 second rate of lines handed out, shown in the same form as an age (see "Clients table"), or as `-` when that rate is 0. When cycling is off and the position equals the total number of lines, show `DONE` in place of `ETA` and the estimate.
+   - lines handed out in the last 60 seconds, then `items/min`
+   - requests in the last 60 seconds, then `req/min`
+   - `wrap` and the wrap counter (omit when cycling is off)
+   - number of known client IPs
+   - how many of them are blocked
+4. **Events pane**: the most recent events, newest at the bottom, as many as fit.
+5. **Key bar** (1 row). As in `htop`, the key names are in the terminal's colors and the rest of the row is black on cyan.
 
-In the status line, values are bold and the words between them are dim (not dark gray, which some palettes make the background color), so that the values stand out; a count of blocked IPs above 0 is red. While the server is paused, the status line starts with `PAUSED` in a standout style (for example reverse video), and the key bar shows `F5 Resume` in place of `F5 Pause`.
+The progress bar is filled from its left end: of its columns, the share that is filled is the position divided by the total number of lines, rounded down to whole columns. For an item file without lines, no column is filled. The text is drawn on top of the fill. To the right of both the text and the fill, the row is a rule of `─` (U+2500).
 
-Let R be the number of rows between the blank row and the key bar, less the separator row. The events pane gets R / 3 rows, rounded down; the clients table, including its header row, gets the rest.
+Outside the fill, the percent and the estimate (or `DONE`) are bold, the other values are in the terminal's colors, and the words between the values and the rule are dim (not dark gray, which some palettes make the background color), so that the two values read most often stand out. The fill is black on the terminal's foreground color, or black on yellow while the server is paused, or black on green when cycling is off and the position equals the total number of lines (also while the server is paused). Text in the fill is black, neither bold nor dim. `PAUSED` is black on yellow, and a count of blocked IPs above 0 is black on red; both keep these colors in the fill. Draw each of these as reverse video of the color on black, as for the selected row (see "Clients table"). While the server is paused, the key bar shows `F5 Resume` in place of `F5 Pause`.
 
-Except for the separator row, no borders and no titles; they cost rows and columns. Numbers of items and requests use `,` as thousands separator. The dashboard must draw without panicking at every terminal size, down to 1×1, and with an empty item file and with no clients. In a window that is too small, parts are cut off; which parts is up to you.
+Let R be the number of rows between the blank row and the key bar, less the progress bar. The events pane gets R / 3 rows, rounded down; the clients table, including its header row, gets the rest.
+
+Except for the rule in the progress bar, no borders and no titles; they cost rows and columns. Numbers of items and requests use `,` as thousands separator. The dashboard must draw without panicking at every terminal size, down to 1×1, and with an empty item file and with no clients. In a window that is too small, parts are cut off; which parts is up to you.
 
 ### Clients table
 
@@ -368,9 +371,9 @@ While the dashboard runs, set the title of the terminal window, so that a list o
 | The server is paused | `PAUSED 12.5% items.txt` |
 | Otherwise | `12.5% items.txt` |
 
-The percent is the one from the status line. Write the title only when its text changes. For an item file without lines the percent is `-`, as in the status line, so with cycling on the title is `- items.txt`, or `PAUSED - items.txt` while paused. (With cycling off, the position 0 equals the total 0, so the first row of the table applies and the title is `DONE items.txt`.) At every exit that restores the terminal (a clean exit, a failure while running, or a panic), set the title to `stopped items.txt`.
+The percent is the one from the progress bar. Write the title only when its text changes. For an item file without lines the percent is `-`, as in the progress bar, so with cycling on the title is `- items.txt`, or `PAUSED - items.txt` while paused. (With cycling off, the position 0 equals the total 0, so the first row of the table applies and the title is `DONE items.txt`.) At every exit that restores the terminal (a clean exit, a failure while running, or a panic), set the title to `stopped items.txt`.
 
-The item file name comes from the command line and is written to the terminal, in the title and in the status line. Clean it first in the same way as a `User-Agent` value.
+The item file name comes from the command line and is written to the terminal, in the title and in the name line. Clean it first in the same way as a `User-Agent` value.
 
 ### Events pane
 
@@ -495,8 +498,8 @@ Required, at minimum:
 - A dashboard started from saved view settings shows that sort column, that direction, and those columns, with the rows in that order, also when the saved sort column is hidden; changing them changes what the next save writes.
 - `F2` shows and hides the `UA` column; `F3` shows and hides the `HOST` column.
 - Sorting by `HOST` puts `b.example.com` next to `a.example.com` and before `a.example.net`, keeps `a.foo-bar.com` and `b.foo-bar.com` adjacent although `c.foo.com` exists, and puts clients without a name last in both directions. The `HOST` cell is `-` for a client looked up without a name and empty for a client without a name that has not been looked up. A name of 72 characters is shown whole on a wide screen, with the `UA` column after it in every row and a shorter name right-aligned to its end; on a narrower screen it shows its end.
-- `F5` pauses and resumes; while paused, the status line starts with `PAUSED` and the key bar shows `F5 Resume`.
-- The status line shows the number of client IPs and of blocked ones, and shows `DONE` when cycling is off and the position is at the end of the file.
+- `F5` pauses and resumes; while paused, the text of the progress bar starts with `PAUSED` and the key bar shows `F5 Resume`.
+- The progress bar shows the number of client IPs and of blocked ones, and shows `DONE` when cycling is off and the position is at the end of the file. Its fill covers the share of the columns that the position is of the total, in the color of the server's state.
 - The title text for each row of the "Terminal title" table, and for an item file without lines.
 - Drawing works with an empty item file and with no clients.
 - Property test: drawing never panics for arbitrary terminal sizes from 1×1 to 300×100 and arbitrary client tables.
