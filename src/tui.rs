@@ -15,7 +15,7 @@ use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::crossterm::{cursor, execute};
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::{DefaultTerminal, Terminal, backend::CrosstermBackend};
@@ -130,11 +130,24 @@ fn is_sortable(column: Column) -> bool {
     column != Column::Ua
 }
 
-fn is_right_aligned(column: Column) -> bool {
-    matches!(
-        column,
-        Column::Items | Column::First | Column::Last | Column::Reqs | Column::Host
-    )
+/// How the cells of `column` are aligned in it.
+fn alignment(column: Column) -> Alignment {
+    match column {
+        Column::Items | Column::First | Column::Last | Column::Reqs | Column::Host => {
+            Alignment::Right
+        }
+        Column::Blocked | Column::Ip | Column::Ua => Alignment::Left,
+    }
+}
+
+/// How the header of `column` is aligned in it: as its cells are, except that the header of the
+/// `HOST` column is centered, because the column can be much wider than the header.
+fn header_alignment(column: Column) -> Alignment {
+    if column == Column::Host {
+        Alignment::Center
+    } else {
+        alignment(column)
+    }
 }
 
 /// Whether `column` sorts with the largest value first (the most recent time, or blocked
@@ -356,14 +369,18 @@ impl Placed {
         x >= self.x && x - self.x < self.width
     }
 
-    /// Draws `text` in this column on screen row `y`, aligned as the column is and cut off at
-    /// the end of the column.
-    fn draw(&self, buf: &mut Buffer, y: u16, text: &str, style: Style) {
+    /// Draws `text` in this column on screen row `y`, aligned by `alignment` and cut off at the
+    /// end of the column. Centered text that can't be centered exactly is half a cell right of
+    /// the center.
+    fn draw(&self, buf: &mut Buffer, y: u16, text: &str, alignment: Alignment, style: Style) {
         let length = u16::try_from(text.chars().count()).unwrap_or(u16::MAX);
-        let mut x = self.x;
-        if is_right_aligned(self.column) {
-            x = x.saturating_add(self.width.saturating_sub(length));
-        }
+        let room = self.width.saturating_sub(length);
+        let offset = match alignment {
+            Alignment::Left => 0,
+            Alignment::Center => room.div_ceil(2),
+            Alignment::Right => room,
+        };
+        let x = self.x.saturating_add(offset);
         buf.set_stringn(x, y, text, usize::from(self.width), style);
     }
 }
@@ -644,7 +661,8 @@ impl Dashboard {
                 arrow = if is_descending(view) { "▼" } else { "▲" };
             }
             let text = format!("{}{arrow}", header(placed.column));
-            placed.draw(buf, area.y, &text, Style::new());
+            let alignment = header_alignment(placed.column);
+            placed.draw(buf, area.y, &text, alignment, Style::new());
         }
         self.drawn.header_y = Some(area.y);
 
@@ -667,7 +685,7 @@ impl Dashboard {
                 if placed.column == Column::Host {
                     text = shorten_host(&text, placed.width);
                 }
-                placed.draw(buf, y, &text, style);
+                placed.draw(buf, y, &text, alignment(placed.column), style);
             }
             self.drawn.rows.push(DrawnRow {
                 y,
@@ -1710,6 +1728,10 @@ mod tests {
             screen[2].contains(" a.example.com  curl/8.9.1"),
             "{screen:?}"
         );
+        // The header is centered over the names
+        let (host_x, _) = find(&screen[1..2], "HOST");
+        let (long_x, _) = find(&screen[3..4], &long);
+        assert_eq!(host_x, long_x + (72 - 4) / 2, "{screen:?}");
 
         // On a narrow screen, the name keeps its end and fills the rest of the row
         let screen = draw_snapshot(&snapshot, 100, 8);
