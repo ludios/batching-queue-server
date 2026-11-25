@@ -17,7 +17,6 @@ use ratatui::crossterm::terminal::{
 use ratatui::crossterm::{cursor, execute};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::symbols::line;
 use ratatui::text::{Line, Span};
 use ratatui::{DefaultTerminal, Terminal, backend::CrosstermBackend};
 use std::cmp::Ordering;
@@ -43,6 +42,19 @@ const GAP: u16 = 2;
 
 /// The screen columns that each label of the key bar takes, as in htop.
 const LABEL_WIDTH: usize = 6;
+
+// The colors of the progress bar that are entries of the 256-color palette. Unlike the colors 0
+// to 15, they don't change with the terminal's color scheme.
+/// The color of the values.
+const BAR_VALUE: Color = Color::Indexed(255);
+/// The color of the words between the values.
+const BAR_WORD: Color = Color::Indexed(250);
+/// The background of the complete part while the server is paused: dark yellow.
+const BAR_PAUSED: Color = Color::Indexed(94);
+/// The background of the complete part when the server is done: green.
+const BAR_DONE: Color = Color::Indexed(28);
+/// The background of the part that is not complete: dark gray.
+const BAR_REST: Color = Color::Indexed(238);
 
 /// The rows that one turn of the mouse wheel moves the selection by.
 const WHEEL_ROWS: isize = 3;
@@ -281,9 +293,7 @@ fn percent(position: u64, total: u64) -> String {
     format!("{}.{}%", tenths / 10, tenths % 10)
 }
 
-/// Returns the style that shows black text on `color`. It is reverse video of `color` on black,
-/// so that it stays in reverse video when colors are turned off (`NO_COLOR`). `Color::Reset`
-/// stands for the terminal's foreground color.
+/// Returns the style that shows black text on `color`: reverse video of `color` on black.
 fn black_on(color: Color) -> Style {
     Style::new()
         .fg(color)
@@ -498,33 +508,29 @@ impl Dashboard {
     }
 
     /// Returns the text of the progress bar for `snapshot`, most important part first, because
-    /// a narrow window cuts off the right end. The percent and the estimated time are bold, the
-    /// other values are plain, and the words between them are dim. `PAUSED` and a count of
-    /// blocked IPs above 0 are black on a color.
+    /// a narrow window cuts off the right end. The spans don't set a background, except for
+    /// `PAUSED` (black on yellow) and a count of blocked IPs above 0 (black on red). Values are
+    /// bold and white, and the words between them are light gray, as is a blocked count of 0.
     fn progress(&self, snapshot: &Snapshot) -> Line<'static> {
-        let bold = Style::new().add_modifier(Modifier::BOLD);
-        // Dim, and not dark gray: some palettes make dark gray the background color
-        let dim = Style::new().add_modifier(Modifier::DIM);
-        let main = |text: String| Span::styled(text, bold);
-        let value = |number: u64| Span::raw(thousands(number));
-        let label = |text: &'static str| Span::styled(text, dim);
-        let mut spans = vec![label(" ")];
+        let value_style = Style::new().fg(BAR_VALUE).add_modifier(Modifier::BOLD);
+        let value = |text: String| Span::styled(text, value_style);
+        let count = |number: u64| value(thousands(number));
+        let word = |text: &'static str| Span::styled(text, Style::new().fg(BAR_WORD));
+        let mut spans = Vec::new();
         if snapshot.paused {
-            spans = vec![
-                Span::styled(" PAUSED ", black_on(Color::Yellow)),
-                label(" "),
-            ];
+            let paused = Span::styled(" PAUSED ", black_on(Color::Yellow));
+            spans.extend([paused, word(" ")]);
         }
         spans.extend([
-            main(percent(snapshot.position, snapshot.total)),
-            label("  "),
-            value(snapshot.position),
-            label(" / "),
-            value(snapshot.total),
-            label("   "),
+            value(percent(snapshot.position, snapshot.total)),
+            word("  "),
+            count(snapshot.position),
+            word(" / "),
+            count(snapshot.total),
+            word("   "),
         ]);
         if self.is_done(snapshot) {
-            spans.push(main("DONE".to_owned()));
+            spans.push(value("DONE".to_owned()));
         } else {
             let mut eta = "-".to_owned();
             if snapshot.lines_per_minute > 0 {
@@ -532,22 +538,22 @@ impl Dashboard {
                 let seconds = u128::from(remaining) * 60 / u128::from(snapshot.lines_per_minute);
                 eta = duration(u64::try_from(seconds).unwrap_or(u64::MAX));
             }
-            spans.extend([label("ETA "), main(eta)]);
+            spans.extend([word("ETA "), value(eta)]);
         }
         spans.extend([
-            label("   "),
-            value(snapshot.lines_per_minute),
-            label(" items/min   "),
-            value(snapshot.requests_per_minute),
-            label(" req/min   "),
+            word("   "),
+            count(snapshot.lines_per_minute),
+            word(" items/min   "),
+            count(snapshot.requests_per_minute),
+            word(" req/min   "),
         ]);
         if self.config.cycle {
-            spans.extend([label("wrap "), value(snapshot.wraps), label("   ")]);
+            spans.extend([word("wrap "), count(snapshot.wraps), word("   ")]);
         }
         let ips = snapshot.rows.len();
         spans.extend([
-            value(ips as u64),
-            label(if ips == 1 { " IP   " } else { " IPs   " }),
+            count(ips as u64),
+            word(if ips == 1 { " IP   " } else { " IPs   " }),
         ]);
         let blocked = snapshot
             .rows
@@ -558,48 +564,44 @@ impl Dashboard {
             let text = format!(" {} blocked ", thousands(blocked as u64));
             spans.push(Span::styled(text, black_on(Color::Red)));
         } else {
-            spans.push(label("0 blocked"));
+            spans.push(word("0 blocked"));
         }
-        spans.push(label(" "));
         Line::from(spans)
     }
 
-    /// Draws the progress bar of `snapshot` on screen row `y` of `area` of `buf`. The share of
-    /// the row that is filled, from the left end, is the share of the lines that the server has
-    /// handed out. The fill is black on the terminal's foreground color, or on yellow while the
-    /// server is paused, or on green when the server is done. The text is on top of the fill,
-    /// and a rule takes the part of the row that has neither.
+    /// Draws the progress bar of `snapshot` on screen row `y` of `area` of `buf`. The whole row
+    /// has a background, in two parts. The complete part, at the left end, takes the share of
+    /// the row that the position is of the total number of lines; it is blue, or dark yellow
+    /// while the server is paused, or green when the server is done. The rest of the row is dark
+    /// gray. The text is centered on top of both, in the same colors on both.
     fn draw_progress_bar(&self, buf: &mut Buffer, y: u16, area: Rect, snapshot: &Snapshot) {
-        let text = self.progress(snapshot);
-        buf.set_line(area.x, y, &text, area.width);
-
-        let mut filled = 0;
+        let mut complete = 0;
         if snapshot.total > 0 {
             let width = u128::from(area.width);
             let share = u128::from(snapshot.position) * width / u128::from(snapshot.total);
-            filled = u16::try_from(share.min(width)).expect("at most the width");
+            complete = u16::try_from(share.min(width)).expect("at most the width");
         }
-        let mut color = Color::Reset;
+        let mut color = Color::Blue;
         if snapshot.paused {
-            color = Color::Yellow;
+            color = BAR_PAUSED;
         }
         if self.is_done(snapshot) {
-            color = Color::Green;
+            color = BAR_DONE;
         }
-        let fill = black_on(color).remove_modifier(Modifier::BOLD | Modifier::DIM);
-        for x in area.x..area.x + filled {
-            let cell = &mut buf[(x, y)];
-            // `PAUSED` and the count of blocked IPs keep their own colors
-            if !cell.modifier.contains(Modifier::REVERSED) {
-                cell.set_style(fill);
-            }
-        }
+        let row = Rect::new(area.x, y, area.width, 1);
+        buf.set_style(row, Style::new().bg(BAR_REST));
+        buf.set_style(
+            Rect {
+                width: complete,
+                ..row
+            },
+            Style::new().bg(color),
+        );
 
+        let text = self.progress(snapshot);
         let text_width = u16::try_from(text.width()).unwrap_or(u16::MAX);
-        let rule_start = text_width.max(filled).min(area.width);
-        let rule = line::HORIZONTAL.repeat(usize::from(area.width - rule_start));
-        let dim = Style::new().add_modifier(Modifier::DIM);
-        buf.set_string(area.x + rule_start, y, rule, dim);
+        let margin = area.width.saturating_sub(text_width) / 2;
+        buf.set_line(area.x + margin, y, &text, area.width - margin);
     }
 
     /// Draws the clients table of `snapshot` at `now` in `area` of `buf`.
@@ -1222,6 +1224,30 @@ mod tests {
         })
     }
 
+    /// Returns `text` as the 100-column progress bar shows it: centered, without trailing spaces.
+    fn centered(text: &str) -> String {
+        let margin = (100 - text.chars().count()) / 2;
+        format!("{:margin$}{}", "", text.trim_end())
+    }
+
+    /// Returns the backgrounds that the progress bar on row 8 of `buffer` shows, as runs from
+    /// left to right: each color with the number of adjacent columns that have it.
+    fn bar_backgrounds(buffer: &Buffer) -> Vec<(Color, u16)> {
+        let mut runs: Vec<(Color, u16)> = Vec::new();
+        for x in 0..buffer.area.width {
+            let cell = &buffer[(x, 8)];
+            let mut shown = cell.bg;
+            if cell.modifier.contains(Modifier::REVERSED) {
+                shown = cell.fg;
+            }
+            match runs.last_mut() {
+                Some((color, columns)) if *color == shown => *columns += 1,
+                _ => runs.push((shown, 1)),
+            }
+        }
+        runs
+    }
+
     /// Returns the rows of `buffer` as text, without trailing spaces.
     fn screen(buffer: &Buffer) -> Vec<String> {
         let width = usize::from(buffer.area.width);
@@ -1269,7 +1295,7 @@ mod tests {
         }
         let screen = test.draw();
         let progress =
-            " 0.0%  0 / 10   ETA 0s   1,000 items/min   2 req/min   wrap 0   3 IPs    1 blocked  ";
+            "0.0%  0 / 10   ETA 0s   1,000 items/min   2 req/min   wrap 0   3 IPs    1 blocked ";
         assert_eq!(
             screen,
             [
@@ -1281,7 +1307,7 @@ mod tests {
                 "",
                 "",
                 "",
-                &format!("{progress:─<100}"),
+                &centered(progress),
                 "",
                 "11:59:59 203.0.113.7   1,000",
                 "11:59:59 198.51.100.9  blocked",
@@ -1289,18 +1315,24 @@ mod tests {
             ]
         );
 
-        // In the progress bar, the percent is bold, the other values are plain, and the words
-        // between them and the rule are dim; a count of blocked IPs above 0 is black on red
+        // In the progress bar, the values are bold and white, and the words between them are
+        // light gray
         let buffer = test.terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].modifier, Modifier::empty());
-        assert_eq!(buffer[(1, 8)].modifier, Modifier::BOLD);
         let (x, _) = find(&screen[8..9], "1,000 items/min");
-        assert_eq!(buffer[(x, 8)].modifier, Modifier::empty());
-        assert_eq!(buffer[(x + 6, 8)].modifier, Modifier::DIM);
-        assert_eq!(buffer[(99, 8)].modifier, Modifier::DIM);
+        assert_eq!(buffer[(x, 8)].fg, BAR_VALUE);
+        assert_eq!(buffer[(x, 8)].modifier, Modifier::BOLD);
+        assert_eq!(buffer[(x + 6, 8)].fg, BAR_WORD);
+        assert_eq!(buffer[(x + 6, 8)].modifier, Modifier::empty());
+        // Nothing is complete; a count of blocked IPs above 0 is black on red
         let (x, _) = find(&screen[8..9], "1 blocked");
-        assert_eq!(buffer[(x, 8)].fg, Color::Red);
-        assert_eq!(buffer[(x, 8)].modifier, Modifier::REVERSED);
+        assert_eq!(buffer[(x, 8)].bg, Color::Black);
+        let backgrounds = [
+            (BAR_REST, x - 1),
+            (Color::Red, 11),
+            (BAR_REST, 100 - 11 - (x - 1)),
+        ];
+        assert_eq!(bar_backgrounds(buffer), backgrounds);
 
         // The header row is green, but the header of the sort column is cyan
         assert_eq!(buffer[(99, 1)].bg, Color::Green);
@@ -1689,16 +1721,17 @@ mod tests {
         test.press(KeyCode::F(5));
         assert!(test.shared.state.lock().unwrap().is_paused());
         let screen = test.draw();
-        assert!(screen[8].starts_with(" PAUSED  0.0%"));
+        assert!(screen[8].trim_start().starts_with("PAUSED  0.0%"));
         assert!(screen[12].contains("F5Resume"));
-        assert!(
-            test.terminal.backend().buffer()[(0, 8)]
-                .modifier
-                .contains(Modifier::REVERSED)
+        let (x, _) = find(&screen[8..9], "PAUSED");
+        let buffer = test.terminal.backend().buffer();
+        assert_eq!(
+            bar_backgrounds(buffer)[..2],
+            [(BAR_REST, x - 1), (Color::Yellow, 8)]
         );
         test.press(KeyCode::Char('p'));
         assert!(!test.shared.state.lock().unwrap().is_paused());
-        assert!(test.draw()[8].starts_with(" 0.0%"));
+        assert!(test.draw()[8].trim_start().starts_with("0.0%"));
 
         // A click on a key bar label does what its key does
         test.click_text(12, "F5Pause");
@@ -1734,31 +1767,15 @@ mod tests {
 
     #[test]
     fn progress_bar_and_title() {
-        let clients = three_clients();
-        let mut test = Test::new(3, false, View::default(), &clients);
-        test.shared.state.lock().unwrap().set_blocked(B, true);
+        let mut test = Test::new(3, false, View::default(), &three_clients()[..2]);
         let title = |test: &Test| {
             let snapshot = snapshot(&test.shared, 10, Instant::now());
             test.dashboard.title(&snapshot)
         };
-        /// Returns the foreground color of the cells in columns `xs` of the progress bar if they
-        /// are part of the fill, and `None` if they are not in reverse video.
-        fn fill(test: &Test, xs: Range<u16>) -> Option<Color> {
-            let buffer = test.terminal.backend().buffer();
-            let cell = &buffer[(xs.start, 8)];
-            for x in xs {
-                assert_eq!(buffer[(x, 8)].style(), cell.style());
-            }
-            if cell.modifier == Modifier::REVERSED {
-                assert_eq!(cell.bg, Color::Black);
-                return Some(cell.fg);
-            }
-            assert!(!cell.modifier.contains(Modifier::REVERSED));
-            None
-        }
-        let text = " 0.0%  0 / 3   ETA -   0 items/min   0 req/min   3 IPs    1 blocked  ";
-        assert_eq!(test.draw()[8], format!("{text:─<100}"));
-        assert_eq!(fill(&test, 0..1), None);
+        let backgrounds = |test: &Test| bar_backgrounds(test.terminal.backend().buffer());
+        let text = "0.0%  0 / 3   ETA -   0 items/min   0 req/min   2 IPs   0 blocked";
+        assert_eq!(test.draw()[8], centered(text));
+        assert_eq!(backgrounds(&test), [(BAR_REST, 100)]);
         assert_eq!(title(&test), "0.0% items.txt");
 
         {
@@ -1767,28 +1784,47 @@ mod tests {
             let time = time("2026-11-24T11:59:30Z");
             state.record_outcome(A, time, Instant::now(), Outcome::Lines(1));
         }
-        // A third of the 100 columns is filled, and the fill takes the bold from the percent
-        let text = " 33.3%  1 / 3   ETA 2m   1 items/min   1 req/min   3 IPs    1 blocked  ";
-        assert_eq!(test.draw()[8], format!("{text:─<100}"));
-        assert_eq!(fill(&test, 0..33), Some(Color::Reset));
-        assert_eq!(fill(&test, 33..34), None);
+        // 1 of 3 lines is 33 of 100 columns, rounded down. The text has the same colors on
+        // both parts.
+        let text = "33.3%  1 / 3   ETA 2m   1 items/min   1 req/min   2 IPs   0 blocked";
+        let screen = test.draw();
+        assert_eq!(screen[8], centered(text));
+        assert_eq!(backgrounds(&test), [(Color::Blue, 33), (BAR_REST, 67)]);
+        let buffer = test.terminal.backend().buffer();
+        let (x, _) = find(&screen[8..9], "33.3%");
+        assert_eq!(buffer[(x, 8)].fg, BAR_VALUE);
+        let (x, _) = find(&screen[8..9], "ETA 2m");
+        assert_eq!(buffer[(x, 8)].bg, Color::Blue);
+        assert_eq!(buffer[(x, 8)].fg, BAR_WORD);
+        assert_eq!(buffer[(x + 2, 8)].bg, BAR_REST);
+        assert_eq!(buffer[(x + 2, 8)].fg, BAR_WORD);
+        assert_eq!(buffer[(x + 4, 8)].fg, BAR_VALUE);
         assert_eq!(title(&test), "33.3% items.txt");
         test.shared.state.lock().unwrap().set_paused(true);
-        test.draw();
-        assert_eq!(fill(&test, 0..33), Some(Color::Yellow));
+        // `PAUSED` is black on yellow, in 8 columns of the complete part
+        let screen = test.draw();
+        let (x, _) = find(&screen[8..9], "PAUSED");
+        let paused = [
+            (BAR_PAUSED, x - 1),
+            (Color::Yellow, 8),
+            (BAR_PAUSED, 33 - 8 - (x - 1)),
+            (BAR_REST, 67),
+        ];
+        assert_eq!(backgrounds(&test), paused);
         assert_eq!(title(&test), "PAUSED 33.3% items.txt");
 
-        // When the server is done, the fill takes the place of the whole rule, but `PAUSED` and
-        // the count of blocked IPs keep their colors
+        // When the server is done, the whole row is complete, except for `PAUSED`
         test.shared.state.lock().unwrap().take(A, 2).unwrap();
+        let text = " PAUSED  100.0%  3 / 3   DONE   1 items/min   1 req/min   2 IPs   0 blocked";
         let screen = test.draw();
-        let text = " PAUSED  100.0%  3 / 3   DONE   1 items/min   1 req/min   3 IPs    1 blocked";
-        assert_eq!(screen[8], text);
-        assert_eq!(fill(&test, 0..8), Some(Color::Yellow));
-        let (x, _) = find(&screen[8..9], "1 blocked");
-        assert_eq!(fill(&test, 8..x - 1), Some(Color::Green));
-        assert_eq!(fill(&test, x - 1..x + 10), Some(Color::Red));
-        assert_eq!(fill(&test, x + 10..100), Some(Color::Green));
+        assert_eq!(screen[8], centered(text));
+        let (x, _) = find(&screen[8..9], "PAUSED");
+        let done = [
+            (BAR_DONE, x - 1),
+            (Color::Yellow, 8),
+            (BAR_DONE, 100 - 8 - (x - 1)),
+        ];
+        assert_eq!(backgrounds(&test), done);
         assert_eq!(title(&test), "DONE items.txt");
     }
 
@@ -1803,13 +1839,17 @@ mod tests {
             assert_eq!(screen[0], format!("items.txt{:>91}", ":31417"));
             if cycle {
                 let text =
-                    " -  0 / 0   ETA -   0 items/min   0 req/min   wrap 0   0 IPs   0 blocked ";
-                assert_eq!(screen[8], format!("{text:─<100}"));
+                    "-  0 / 0   ETA -   0 items/min   0 req/min   wrap 0   0 IPs   0 blocked";
+                assert_eq!(screen[8], centered(text));
                 assert_eq!(title, "- items.txt");
             } else {
-                assert!(screen[8].starts_with(" -  0 / 0   DONE   0 items/min"));
+                let text = "-  0 / 0   DONE   0 items/min   0 req/min   0 IPs   0 blocked";
+                assert_eq!(screen[8], centered(text));
                 assert_eq!(title, "DONE items.txt");
             }
+            // Without lines, no part of the progress bar is complete
+            let buffer = test.terminal.backend().buffer();
+            assert_eq!(bar_backgrounds(buffer), [(BAR_REST, 100)]);
             assert_eq!(test.dashboard.selected, None);
             assert!(!test.press(KeyCode::F(9)));
             assert!(!test.press(KeyCode::End));

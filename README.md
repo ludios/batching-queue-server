@@ -127,7 +127,7 @@ items.txt                                                                       
 allowed  203.0.113.7   12,400      3d     2s    124  crawler-7.example.net
 blocked  198.51.100.9     300      1h     0s  1,215                      -
 allowed  2001:db8::17       0      5m     5m      1    scanner.example.org
- 12.5%  1,234,567 / 9,876,536   ETA 14d   412 items/min   38 req/min   wrap 3   3 IPs    1 blocked  ─────
+   12.5%  1,234,567 / 9,876,536   ETA 14d   412 items/min   38 req/min   wrap 3   3 IPs    1 blocked
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
 F2UA    F3Host  F5Pause F6Sort  F7InvertF9Block F10Quit
@@ -137,7 +137,7 @@ From top to bottom:
 
 1. The name line: the item file name, and the port at the right end.
 2. The clients table, one row per client IP address. `FIRST` and `LAST` are the times since the client's first and most recent request. `HOST` is the reverse DNS name (the `PTR` record) of the client IP address, as a hint about who the client is. A client without a name is looked up at its first request in each run of the server; its cell is empty until that lookup has finished, and `-` if the lookup didn't find a name. `UA` is the most recent `User-Agent`; this column is hidden unless the operator has chosen to show it, and it gets only the room that the other columns leave. Rows of blocked IP addresses are drawn in red. The selected row is black on cyan, or black on red if its client is blocked.
-3. The progress bar, which fills from the left end as lines are handed out. Its text: the percent done, the position, and the number of lines in the file; the estimated time until the end of the pass, at the rate of the last minute (or `DONE` when cycling is off and every line has been handed out); the lines handed out and the requests in the last minute; the wrap counter (with `--cycle` only); and the number of client IP addresses and how many of them are blocked. While the server is paused, the text starts with `PAUSED` and the fill is yellow. When cycling is off and every line has been handed out, the fill is green.
+3. The progress bar. The part of it at the left end that is blue grows as lines are handed out; the rest is dark gray. Its text: the percent done, the position, and the number of lines in the file; the estimated time until the end of the pass, at the rate of the last minute (or `DONE` when cycling is off and every line has been handed out); the lines handed out and the requests in the last minute; the wrap counter (with `--cycle` only); and the number of client IP addresses and how many of them are blocked. While the server is paused, the text starts with `PAUSED` and the blue part is dark yellow instead. When cycling is off and every line has been handed out, the whole bar is green, also while the server is paused.
 4. The events pane: the most recent requests, newest at the bottom, each with its time, its client, and its outcome (the number of lines handed out, `blocked`, `wrong path`, `paused`, or `rejected` with the status code).
 5. The key bar.
 
