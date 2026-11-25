@@ -15,7 +15,7 @@ use ratatui::crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, SetTitle, disable_raw_mode, enable_raw_mode,
 };
 use ratatui::crossterm::{cursor, execute};
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::{HorizontalAlignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::{DefaultTerminal, Terminal, backend::CrosstermBackend};
@@ -131,22 +131,22 @@ fn is_sortable(column: Column) -> bool {
 }
 
 /// How the cells of `column` are aligned in it.
-fn alignment(column: Column) -> Alignment {
+fn cell_alignment(column: Column) -> HorizontalAlignment {
     match column {
         Column::Items | Column::First | Column::Last | Column::Reqs | Column::Host => {
-            Alignment::Right
+            HorizontalAlignment::Right
         }
-        Column::Blocked | Column::Ip | Column::Ua => Alignment::Left,
+        Column::Blocked | Column::Ip | Column::Ua => HorizontalAlignment::Left,
     }
 }
 
 /// How the header of `column` is aligned in it: as its cells are, except that the header of the
 /// `HOST` column is centered, because the column can be much wider than the header.
-fn header_alignment(column: Column) -> Alignment {
+fn header_alignment(column: Column) -> HorizontalAlignment {
     if column == Column::Host {
-        Alignment::Center
+        HorizontalAlignment::Center
     } else {
-        alignment(column)
+        cell_alignment(column)
     }
 }
 
@@ -372,13 +372,20 @@ impl Placed {
     /// Draws `text` in this column on screen row `y`, aligned by `alignment` and cut off at the
     /// end of the column. Centered text that can't be centered exactly is half a cell right of
     /// the center.
-    fn draw(&self, buf: &mut Buffer, y: u16, text: &str, alignment: Alignment, style: Style) {
+    fn draw(
+        &self,
+        buf: &mut Buffer,
+        y: u16,
+        text: &str,
+        alignment: HorizontalAlignment,
+        style: Style,
+    ) {
         let length = u16::try_from(text.chars().count()).unwrap_or(u16::MAX);
         let room = self.width.saturating_sub(length);
         let offset = match alignment {
-            Alignment::Left => 0,
-            Alignment::Center => room.div_ceil(2),
-            Alignment::Right => room,
+            HorizontalAlignment::Left => 0,
+            HorizontalAlignment::Center => room.div_ceil(2),
+            HorizontalAlignment::Right => room,
         };
         let x = self.x.saturating_add(offset);
         buf.set_stringn(x, y, text, usize::from(self.width), style);
@@ -685,7 +692,7 @@ impl Dashboard {
                 if placed.column == Column::Host {
                     text = shorten_host(&text, placed.width);
                 }
-                placed.draw(buf, y, &text, alignment(placed.column), style);
+                placed.draw(buf, y, &text, cell_alignment(placed.column), style);
             }
             self.drawn.rows.push(DrawnRow {
                 y,
