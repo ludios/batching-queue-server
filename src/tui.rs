@@ -61,6 +61,9 @@ const BAR_REST: Color = Color::Indexed(238);
 const SELECTED: Color = Color::Indexed(240);
 /// The color of the text in the selected row of the clients table.
 const SELECTED_TEXT: Color = Color::Indexed(255);
+/// The color of the text `allowed` in a row of the clients table that is not selected: a gray
+/// that is readable on a dark background and on a light one.
+const ALLOWED: Color = Color::Indexed(244);
 
 /// The rows that one turn of the mouse wheel moves the selection by.
 const WHEEL_ROWS: isize = 3;
@@ -676,7 +679,8 @@ impl Dashboard {
         for (y, row) in (area.y + 1..area.bottom()).zip(rows.iter().skip(self.scroll)) {
             // Red text is hard to read on gray, so the selected row of a blocked client is black
             // on red
-            let style = match (Some(row.ip) == self.selected, row.client.blocked) {
+            let is_selected = Some(row.ip) == self.selected;
+            let style = match (is_selected, row.client.blocked) {
                 (false, false) => Style::new(),
                 (false, true) => Style::new().fg(Color::Red),
                 (true, false) => Style::new().fg(SELECTED_TEXT).bg(SELECTED),
@@ -688,7 +692,12 @@ impl Dashboard {
                 if placed.column == Column::Host {
                     text = shorten_host(&text, placed.width);
                 }
-                placed.draw(buf, y, &text, cell_alignment(placed.column), style);
+                let mut cell_style = style;
+                // Nearly every row says `allowed`, so it is dim, and a `blocked` stands out
+                if placed.column == Column::Blocked && !row.client.blocked && !is_selected {
+                    cell_style = style.fg(ALLOWED);
+                }
+                placed.draw(buf, y, &text, cell_alignment(placed.column), cell_style);
             }
             self.drawn.rows.push(DrawnRow {
                 y,
@@ -1361,6 +1370,14 @@ mod tests {
             (BAR_REST, 100 - 11 - (x - 1)),
         ];
         assert_eq!(bar_backgrounds(buffer), backgrounds);
+
+        // `allowed` is dim, but the rest of its row is not. In the selected row, and in the row
+        // of a blocked client, the first column is drawn as the rest of the row.
+        assert_eq!(buffer[(0, 4)].fg, ALLOWED);
+        assert_eq!(buffer[(6, 4)].fg, ALLOWED);
+        assert_eq!(buffer[(9, 4)].fg, Color::Reset);
+        assert_eq!(buffer[(0, 2)].fg, SELECTED_TEXT);
+        assert_eq!(buffer[(0, 3)].fg, Color::Red);
 
         // The header row is green, but the header of the sort column is cyan
         assert_eq!(buffer[(99, 1)].bg, Color::Green);

@@ -349,6 +349,7 @@ Columns, left to right:
 - Ages show only their largest unit: `42s`, `17m`, `5h` (below 48 hours), `12d`.
 - Column widths adapt to their content. Columns that do not fit in the window are cut off on the right.
 - Rows of blocked IPs are drawn in a clearly different style (for example red), so that the block state is visible without reading the first column.
+- Nearly every row says `allowed`, so the word `allowed` is drawn in gray (color 244 of the 256-color palette), which lets a `blocked` stand out. The rest of the row keeps its colors. In the selected row, `allowed` is drawn like the rest of that row.
 - The sort column and direction at startup come from the saved view settings; without them the sort is `ITEMS`, largest first. The header of the sort column carries `▼` when the largest value is first (for the time columns: the most recent; for the first column: blocked) and `▲` for the opposite order. So `IP` ascending and `HOST` ascending carry `▲`. As in `htop`, the header row is black on green across the whole width, and the header of the sort column is black on cyan across the width of its column.
 - Making a column the sort column, by click or by key, always starts with its "direction when first chosen", also when it has been the sort column before.
 - Rows that compare equal are ordered by IP address ascending, so that rows never jitter.
