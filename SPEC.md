@@ -238,7 +238,7 @@ Two servers writing the same state file would overwrite each other's position an
 
 - The lock file's path is the state file's path with `.lock` appended (`items.txt.bqs.json.lock`). The server never writes to it, so it stays empty.
 - At startup, before the state file is read, open the lock file, creating it if it does not exist, and try to take an exclusive advisory lock on it without waiting. Open it so that an existing file is never truncated (`OpenOptions` with `create(true)` and `truncate(false)`, not `File::create`).
-- If the lock is held (`TryLockError::WouldBlock`), exit with a startup error that names the state file and says that a running server is using it. The message must also say that the lock cannot be left over from a crash, so that nobody deletes the lock file to get past it.
+- If the lock is held (`TryLockError::WouldBlock`), exit with a startup error that names the state file and says that another server is using it. The message is short; the README says that the lock cannot be left over from a crash, so that nobody deletes the lock file to get past it.
 - Every other failure to open or lock the lock file is a startup error that names the lock file and shows the error of the operating system. Do not report it as "in use", and do not continue without the lock.
 - Keep the lock for as long as the server exists, until after its last save. In the binary that is until the process ends; in a test that runs a server inside the test process, until that server is dropped. The kernel releases the lock when the process ends, however it ends, so a crash cannot leave a lock behind.
 - Never delete the lock file, not at exit either: deleting it would let two servers lock two different files at the same path.

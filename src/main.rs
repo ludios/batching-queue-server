@@ -510,10 +510,7 @@ mod tests {
         let moved = args.item_file.with_extension("moved");
         fs::rename(&args.item_file, &moved).unwrap();
         let error = start_error(&args);
-        assert!(
-            error.contains("a running server is using the state file"),
-            "{error}"
-        );
+        assert!(error.contains("another server is using"), "{error}");
         fs::rename(&moved, &args.item_file).unwrap();
         assert_eq!(fs::read_to_string(args.state_file()).unwrap(), saved);
         assert_eq!(first.get("/").await, (200, "b\n".to_owned()));

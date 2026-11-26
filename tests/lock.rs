@@ -126,10 +126,7 @@ fn a_killed_server_leaves_no_lock_behind() {
     first.wait_until_started();
     let mut second = Server::spawn(&item_file);
     let line = second.read_line();
-    assert!(
-        line.contains("a running server is using the state file"),
-        "{line}"
-    );
+    assert!(line.contains("another server is using"), "{line}");
     assert_eq!(second.exit_code(), Some(1));
 
     first.child.kill().unwrap();
