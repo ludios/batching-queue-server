@@ -64,6 +64,9 @@ const SELECTED_TEXT: Color = Color::Indexed(255);
 /// The color of the text `allowed` in a row of the clients table that is not selected: a gray
 /// that is readable on a dark background and on a light one.
 const ALLOWED: Color = Color::Indexed(244);
+/// The color of the text of a `wrong path`, `paused`, or `rejected` event: dark yellow, because
+/// the yellow of many light color schemes is too pale for text.
+const EVENT_YELLOW: Color = Color::Indexed(136);
 
 /// The rows that one turn of the mouse wheel moves the selection by.
 const WHEEL_ROWS: isize = 3;
@@ -708,10 +711,9 @@ impl Dashboard {
         self.drawn.columns = columns;
     }
 
-    /// Draws the newest of `events` in `area` of `buf`, the newest at the bottom. An event that
-    /// is not a hand-out is drawn in a color, so that it stands out among the hand-outs: in red
-    /// if its client was blocked, as that client's row of the clients table is, and otherwise in
-    /// yellow.
+    /// Draws the newest of `events` in `area` of `buf`, the newest at the bottom. The text of an
+    /// event whose outcome is not a number of lines is in a color, so that it stands out among
+    /// the numbers: red for `blocked`, and dark yellow for every other such outcome.
     fn draw_events(&self, buf: &mut Buffer, area: Rect, events: &[Event]) {
         let events = &events[events.len().saturating_sub(usize::from(area.height))..];
         let ips: Vec<String> = events.iter().map(|event| event.ip.to_string()).collect();
@@ -727,7 +729,7 @@ impl Dashboard {
                 Outcome::Lines(_) => Style::new(),
                 Outcome::Blocked => Style::new().fg(Color::Red),
                 Outcome::WrongPath | Outcome::Paused | Outcome::Rejected(_) => {
-                    Style::new().fg(Color::Yellow)
+                    Style::new().fg(EVENT_YELLOW)
                 }
             };
             let text = format!("{time} {ip:ip_width$}  {outcome}");
@@ -1331,11 +1333,7 @@ mod tests {
     fn layout() {
         let mut test = Test::new(10, true, View::default(), &three_clients());
         test.shared.state.lock().unwrap().set_blocked(B, true);
-        let ips_and_outcomes = [
-            (C, Outcome::WrongPath),
-            (A, Outcome::Lines(1000)),
-            (B, Outcome::Blocked),
-        ];
+        let ips_and_outcomes = [(A, Outcome::Lines(1000)), (B, Outcome::Blocked)];
         for (ip, outcome) in ips_and_outcomes {
             test.shared.state.lock().unwrap().record_outcome(
                 ip,
@@ -1346,7 +1344,7 @@ mod tests {
         }
         let screen = test.draw();
         let progress =
-            "0.0%  0 / 10   ETA 0s   1,000 items/min   3 req/min   wrap 0   3 IPs    1 blocked ";
+            "0.0%  0 / 10   ETA 0s   1,000 items/min   2 req/min   wrap 0   3 IPs    1 blocked ";
         assert_eq!(
             screen,
             [
@@ -1359,7 +1357,7 @@ mod tests {
                 "",
                 "",
                 &centered(progress),
-                "11:59:59 2001:db8::17  wrong path",
+                "",
                 "11:59:59 203.0.113.7   1,000",
                 "11:59:59 198.51.100.9  blocked",
                 "F2UA    F3Host  F5Pause F6Sort  F7InvertF9Block F10Quit",
@@ -1393,13 +1391,6 @@ mod tests {
         assert_eq!(buffer[(0, 2)].fg, SELECTED_TEXT);
         assert_eq!(buffer[(0, 3)].fg, Color::Red);
 
-        // An event that is not a hand-out is in a color from its time to its outcome: red if
-        // its client was blocked, and otherwise yellow
-        for (y, color) in [(9, Color::Yellow), (10, Color::Reset), (11, Color::Red)] {
-            assert_eq!(buffer[(0, y)].fg, color);
-            assert_eq!(buffer[(27, y)].fg, color);
-        }
-
         // The header row is green, but the header of the sort column is cyan
         assert_eq!(buffer[(99, 1)].bg, Color::Green);
         let (x, _) = find(&screen[1..2], "ITEMS▼");
@@ -1415,6 +1406,43 @@ mod tests {
         assert_eq!(buffer[(x + 7, 12)].bg, Color::Cyan);
         assert_eq!(buffer[(x + 8, 12)].bg, Color::Reset);
         assert_eq!(buffer[(99, 12)].bg, Color::Cyan);
+    }
+
+    #[test]
+    fn event_colors() {
+        let mut test = Test::new(10, true, View::default(), &[]);
+        let outcomes_and_colors = [
+            (Outcome::Lines(0), Color::Reset),
+            (Outcome::Lines(1000), Color::Reset),
+            (Outcome::Blocked, Color::Red),
+            (Outcome::WrongPath, EVENT_YELLOW),
+            (Outcome::Paused, EVENT_YELLOW),
+            (Outcome::Rejected(400), EVENT_YELLOW),
+        ];
+        // An events pane of 6 rows, from row 15
+        test.terminal = Terminal::new(TestBackend::new(100, 22)).unwrap();
+        for (outcome, _) in outcomes_and_colors {
+            let time = time("2026-11-24T11:59:59Z");
+            let mut state = test.shared.state.lock().unwrap();
+            state.record_outcome(A, time, Instant::now(), outcome);
+        }
+        let screen = test.draw();
+        let events = [
+            "11:59:59 203.0.113.7  0",
+            "11:59:59 203.0.113.7  1,000",
+            "11:59:59 203.0.113.7  blocked",
+            "11:59:59 203.0.113.7  wrong path",
+            "11:59:59 203.0.113.7  paused",
+            "11:59:59 203.0.113.7  rejected 400",
+        ];
+        assert_eq!(screen[15..21], events);
+        // The color is that of the whole text of the event, from its time to its outcome
+        let buffer = test.terminal.backend().buffer();
+        for ((y, event), (_, color)) in (15..21).zip(events).zip(outcomes_and_colors) {
+            for x in 0..u16::try_from(event.len()).unwrap() {
+                assert_eq!(buffer[(x, y)].fg, color, "{event} at column {x}");
+            }
+        }
     }
 
     #[test]
