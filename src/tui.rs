@@ -693,7 +693,7 @@ impl Dashboard {
                     text = shorten_host(&text, placed.width);
                 }
                 let mut cell_style = style;
-                // Nearly every row says `allowed`, so it is dim, and a `blocked` stands out
+                // Nearly every row says `allowed`, so it is gray, and a `blocked` stands out
                 if placed.column == Column::Blocked && !row.client.blocked && !is_selected {
                     cell_style = style.fg(ALLOWED);
                 }
@@ -1385,7 +1385,7 @@ mod tests {
         ];
         assert_eq!(bar_backgrounds(buffer), backgrounds);
 
-        // `allowed` is dim, but the rest of its row is not. In the selected row, and in the row
+        // `allowed` is gray, but the rest of its row is not. In the selected row, and in the row
         // of a blocked client, the first column is drawn as the rest of the row.
         assert_eq!(buffer[(0, 4)].fg, ALLOWED);
         assert_eq!(buffer[(6, 4)].fg, ALLOWED);
