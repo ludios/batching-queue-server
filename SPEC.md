@@ -379,6 +379,8 @@ The item file name comes from the command line and is written to the terminal, i
 
 Each row: local time as `HH:MM:SS`, client IP, outcome. The outcome is the number of lines handed out, or `blocked`, or `wrong path`, or `paused`, or `rejected` followed by the status code.
 
+A row whose outcome is not a number of lines is drawn in a color, so that it stands out among the hand-outs: a `blocked` row in red, as the row of a blocked IP in the clients table is, and every other such row in yellow.
+
 ### Keys and mouse
 
 | Input | Action |

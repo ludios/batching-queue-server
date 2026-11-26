@@ -708,7 +708,10 @@ impl Dashboard {
         self.drawn.columns = columns;
     }
 
-    /// Draws the newest of `events` in `area` of `buf`, the newest at the bottom.
+    /// Draws the newest of `events` in `area` of `buf`, the newest at the bottom. An event that
+    /// is not a hand-out is drawn in a color, so that it stands out among the hand-outs: in red
+    /// if its client was blocked, as that client's row of the clients table is, and otherwise in
+    /// yellow.
     fn draw_events(&self, buf: &mut Buffer, area: Rect, events: &[Event]) {
         let events = &events[events.len().saturating_sub(usize::from(area.height))..];
         let ips: Vec<String> = events.iter().map(|event| event.ip.to_string()).collect();
@@ -720,8 +723,15 @@ impl Dashboard {
                 Outcome::Lines(lines) => thousands(lines),
                 outcome => outcome.to_string(),
             };
+            let style = match event.outcome {
+                Outcome::Lines(_) => Style::new(),
+                Outcome::Blocked => Style::new().fg(Color::Red),
+                Outcome::WrongPath | Outcome::Paused | Outcome::Rejected(_) => {
+                    Style::new().fg(Color::Yellow)
+                }
+            };
             let text = format!("{time} {ip:ip_width$}  {outcome}");
-            buf.set_stringn(area.x, y, text, usize::from(area.width), Style::new());
+            buf.set_stringn(area.x, y, text, usize::from(area.width), style);
         }
     }
 
@@ -1321,7 +1331,11 @@ mod tests {
     fn layout() {
         let mut test = Test::new(10, true, View::default(), &three_clients());
         test.shared.state.lock().unwrap().set_blocked(B, true);
-        let ips_and_outcomes = [(A, Outcome::Lines(1000)), (B, Outcome::Blocked)];
+        let ips_and_outcomes = [
+            (C, Outcome::WrongPath),
+            (A, Outcome::Lines(1000)),
+            (B, Outcome::Blocked),
+        ];
         for (ip, outcome) in ips_and_outcomes {
             test.shared.state.lock().unwrap().record_outcome(
                 ip,
@@ -1332,7 +1346,7 @@ mod tests {
         }
         let screen = test.draw();
         let progress =
-            "0.0%  0 / 10   ETA 0s   1,000 items/min   2 req/min   wrap 0   3 IPs    1 blocked ";
+            "0.0%  0 / 10   ETA 0s   1,000 items/min   3 req/min   wrap 0   3 IPs    1 blocked ";
         assert_eq!(
             screen,
             [
@@ -1345,7 +1359,7 @@ mod tests {
                 "",
                 "",
                 &centered(progress),
-                "",
+                "11:59:59 2001:db8::17  wrong path",
                 "11:59:59 203.0.113.7   1,000",
                 "11:59:59 198.51.100.9  blocked",
                 "F2UA    F3Host  F5Pause F6Sort  F7InvertF9Block F10Quit",
@@ -1378,6 +1392,13 @@ mod tests {
         assert_eq!(buffer[(9, 4)].fg, Color::Reset);
         assert_eq!(buffer[(0, 2)].fg, SELECTED_TEXT);
         assert_eq!(buffer[(0, 3)].fg, Color::Red);
+
+        // An event that is not a hand-out is in a color from its time to its outcome: red if
+        // its client was blocked, and otherwise yellow
+        for (y, color) in [(9, Color::Yellow), (10, Color::Reset), (11, Color::Red)] {
+            assert_eq!(buffer[(0, y)].fg, color);
+            assert_eq!(buffer[(27, y)].fg, color);
+        }
 
         // The header row is green, but the header of the sort column is cyan
         assert_eq!(buffer[(99, 1)].bg, Color::Green);
