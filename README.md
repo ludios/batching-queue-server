@@ -111,10 +111,10 @@ To change the state, stop the server, edit the state file, and start the server 
 
 ### The lock file
 
-The server locks a file whose path is the state file's path with `.lock` appended (`items.txt.bqs.json.lock`), so that a second server with the same state file path refuses to start.
+The server locks a file whose path is the state file's path with `.lock` appended (`items.txt.bqs.json.lock`), so that a second server with the same state file path refuses to start, with the error `another server is using STATE_FILE`.
 
 - The lock file is permanent. The server creates it, empty, if it is missing, and never deletes it.
-- The lock is never stale: the operating system releases it when the server's process ends, even by a crash or a `kill -9`. So an error that the state file is in use always means that a running process holds the lock.
+- The lock is never stale: the operating system releases it when the server's process ends, even by a crash or a `kill -9`. So this error always means that a running process holds the lock.
 - Do not delete the lock file while a server runs: a second server could then start, and the two would overwrite each other's state file.
 - A symlink or a hard link to the state file under another name gets a different lock file, so the lock doesn't stop two servers that use the two names, and both hand out the same lines.
 - The lock is reliable only on a local filesystem.

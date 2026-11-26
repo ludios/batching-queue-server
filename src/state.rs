@@ -1394,7 +1394,8 @@ mod tests {
         let (_dir, shared) = setup(3);
         let first = lock(shared.path()).unwrap();
         let error = format!("{:#}", lock(shared.path()).err().unwrap());
-        assert!(error.contains("another server is using"), "{error}");
+        let state_file = shared.path().display();
+        assert_eq!(error, format!("another server is using {state_file}"));
         drop(first);
         lock(shared.path()).unwrap();
         assert!(with_suffix(shared.path(), ".lock").exists());
