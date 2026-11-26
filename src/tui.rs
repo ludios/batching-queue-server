@@ -2066,7 +2066,11 @@ mod tests {
     }
 
     fn arbitrary_view() -> impl Strategy<Value = View> {
-        let column = proptest::sample::select(&COLUMNS[..COLUMNS.len() - 1]);
+        let sortable: Vec<Column> = COLUMNS
+            .into_iter()
+            .filter(|&column| is_sortable(column))
+            .collect();
+        let column = proptest::sample::select(sortable);
         (column, any::<bool>(), any::<bool>(), any::<bool>()).prop_map(
             |(sort_column, sort_inverted, show_host, show_ua)| View {
                 sort_column,
