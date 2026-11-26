@@ -75,10 +75,10 @@ const WHEEL_ROWS: isize = 3;
 const COLUMNS: [Column; 8] = [
     Column::Blocked,
     Column::Ip,
-    Column::Items,
-    Column::First,
-    Column::Last,
     Column::Reqs,
+    Column::Items,
+    Column::Last,
+    Column::First,
     Column::Host,
     Column::Ua,
 ];
@@ -1349,10 +1349,10 @@ mod tests {
             screen,
             [
                 &format!("items.txt{:>91}", ":31417"),
-                "         IP            ITEMS▼   FIRST   LAST   REQS   HOST",
-                "allowed  203.0.113.7   12,400      3d     2s    124",
-                "blocked  198.51.100.9     300      3d     2s  1,215",
-                "allowed  2001:db8::17       0      3d     2s      1",
+                "         IP             REQS  ITEMS▼   LAST   FIRST   HOST",
+                "allowed  203.0.113.7     124  12,400     2s      3d",
+                "blocked  198.51.100.9  1,215     300     2s      3d",
+                "allowed  2001:db8::17      1       0     2s      3d",
                 "",
                 "",
                 "",
@@ -1469,6 +1469,11 @@ mod tests {
         assert!(test.draw()[1].contains("IP▲"));
 
         test.press(KeyCode::F(6));
+        assert_eq!(
+            (test.view().sort_column, test.view().sort_inverted),
+            (Column::Reqs, false)
+        );
+        test.press(KeyCode::F(6));
         assert_eq!(test.view().sort_column, Column::Items);
         test.press(KeyCode::Char('i'));
         assert_eq!(test.order(), [C, B, A]);
@@ -1480,14 +1485,13 @@ mod tests {
         test.press(KeyCode::Char('i'));
         assert_eq!(
             (test.view().sort_column, test.view().sort_inverted),
-            (Column::First, true)
+            (Column::Last, true)
         );
         test.press(KeyCode::F(6));
         assert_eq!(
             (test.view().sort_column, test.view().sort_inverted),
-            (Column::Last, false)
+            (Column::First, false)
         );
-        test.press(KeyCode::F(6));
         test.press(KeyCode::F(6));
         assert_eq!(test.view().sort_column, Column::Host);
         // UA is not sortable, so F6 wraps around to the first column

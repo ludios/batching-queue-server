@@ -227,7 +227,7 @@ Timestamps are UTC in the RFC 3339 form shown. Counters and the position are uns
 
 | Field | Meaning | Value without a saved `view` |
 |---|---|---|
-| `sort_column` | The sort column: one of `blocked` (the first column), `ip`, `items`, `first_seen`, `last_seen`, `requests`, `host`. | `items` |
+| `sort_column` | The sort column: one of `blocked` (the first column), `ip`, `requests`, `items`, `last_seen`, `first_seen`, `host`. | `items` |
 | `sort_inverted` | `false` when the order is the sort column's "direction when first chosen", `true` when it is the opposite. | `false` |
 | `show_host` | Whether the `HOST` column is shown. | `true` |
 | `show_ua` | Whether the `UA` column is shown. | `false` |
@@ -295,10 +295,10 @@ From top to bottom. The numbers are examples, from a server started with `--cycl
 
 ```
 items.txt                                                                                          :31417
-         IP            ITEMS▼   FIRST   LAST   REQS           HOST
-allowed  203.0.113.7   12,400      3d     2s    124  crawler-7.example.net
-blocked  198.51.100.9     300      1h     0s  1,215                      -
-allowed  2001:db8::17       0      5m     5m      1    scanner.example.org
+         IP             REQS  ITEMS▼   LAST   FIRST           HOST
+allowed  203.0.113.7     124  12,400     2s      3d  crawler-7.example.net
+blocked  198.51.100.9  1,215     300     0s      1h                      -
+allowed  2001:db8::17      1       0     5m      5m    scanner.example.org
    12.5%  1,234,567 / 9,876,536   ETA 14d   412 items/min   38 req/min   wrap 3   3 IPs    1 blocked
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked
@@ -336,10 +336,10 @@ Columns, left to right:
 |---|---|---|---|
 | (blank) | `allowed` for an unblocked IP, `blocked` for a blocked IP | blocked or not | blocked first |
 | `IP` | the address | address, numerically (IPv4 before IPv6), not as a string | ascending |
-| `ITEMS` | `items` | number | largest first |
-| `FIRST` | age of `first_seen` | time | most recent first |
-| `LAST` | age of `last_seen` | time | most recent first |
 | `REQS` | `requests` | number | largest first |
+| `ITEMS` | `items` | number | largest first |
+| `LAST` | age of `last_seen` | time | most recent first |
+| `FIRST` | age of `first_seen` | time | most recent first |
 | `HOST` | the reverse DNS name; `-` when its lookup in this run didn't find a name; empty while the client doesn't have a name and its lookup in this run has not finished | the whole name (not the shortened form on screen), ignoring case, compared label by label from the last label to the first: `host.example.com` compares as the list `com`, `example`, `host`. So clients of one domain are adjacent. Compare lists, not joined strings, because `-` sorts before `.`. Clients without a name are equal to each other and come after all clients with a name, in both directions. | ascending |
 | `UA` | `user_agent`, or `-` | not sortable | |
 
