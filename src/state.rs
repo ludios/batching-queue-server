@@ -170,13 +170,13 @@ pub enum Column {
     /// The column that says whether the client is blocked.
     Blocked,
     Ip,
-    #[serde(rename = "requests")]
-    Reqs,
     Items,
-    #[serde(rename = "last_seen")]
-    Last,
     #[serde(rename = "first_seen")]
     First,
+    #[serde(rename = "last_seen")]
+    Last,
+    #[serde(rename = "requests")]
+    Reqs,
     Host,
     /// The `User-Agent` column, which cannot be the sort column, and so is never in a state file.
     #[serde(skip)]
