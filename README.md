@@ -99,7 +99,7 @@ The state file holds everything that survives a restart: the position, the wrap 
 - `position` is the number of lines already handed out in the current pass over the item file, which is also the 0-based index of the next line to hand out.
 - `wraps` counts how many times the server has started again at the first line.
 - `clients` has one record for each IP address that has ever made a request, whatever the reply was. `items` is the number of lines handed to that IP address. `user_agent` is the `User-Agent` header of its most recent request that had this header, or `null`. `host` is the reverse DNS name that a lookup found, or `null`; set it to `null` to have the client looked up again at its first request in the next run.
-- `view` holds the dashboard's sort column (one of `blocked`, `ip`, `requests`, `items`, `last_seen`, `first_seen`, `host`), whether the sort direction is inverted, and whether the `HOST` and `UA` columns are shown. If `view` is left out, the values shown above apply.
+- `view` holds the dashboard's sort column (one of `blocked`, `ip`, `items`, `requests`, `last_seen`, `first_seen`, `host`), whether the sort direction is inverted, and whether the `HOST` and `UA` columns are shown. If `view` is left out, the values shown above apply.
 
 If the state file does not exist, the server starts at position 0 and creates it. So if a restarted server reports that it created the state file, check the path: a mistyped `--state-file` makes the server start again at line 0 without its block list, and so does moving or renaming the item file, which changes the default state file path. The server refuses to start if a state file exists but cannot be read, if it is not exactly in this form, or if its `position` is greater than the number of lines in the item file.
 
@@ -123,10 +123,10 @@ The server locks a file whose path is the state file's path with `.lock` appende
 
 ```
 items.txt                                                                                          :31417
-         IP             REQS  ITEMS▼   LAST   FIRST           HOST
-allowed  203.0.113.7     124  12,400     2s      3d  crawler-7.example.net
-blocked  198.51.100.9  1,215     300     0s      1h                      -
-allowed  2001:db8::17      1       0     5m      5m    scanner.example.org
+         IP            ITEMS▼   REQS   LAST   FIRST           HOST
+allowed  203.0.113.7   12,400    124     2s      3d  crawler-7.example.net
+blocked  198.51.100.9     300  1,215     0s      1h                      -
+allowed  2001:db8::17       0      1     5m      5m    scanner.example.org
    12.5%  1,234,567 / 9,876,536   ETA 14d   412 items/min   38 req/min   wrap 3   3 IPs    1 blocked
 12:01:02 203.0.113.7   100
 12:01:04 198.51.100.9  blocked

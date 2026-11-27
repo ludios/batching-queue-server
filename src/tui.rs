@@ -75,8 +75,8 @@ const WHEEL_ROWS: isize = 3;
 const COLUMNS: [Column; 8] = [
     Column::Blocked,
     Column::Ip,
-    Column::Reqs,
     Column::Items,
+    Column::Reqs,
     Column::Last,
     Column::First,
     Column::Host,
@@ -1349,10 +1349,10 @@ mod tests {
             screen,
             [
                 &format!("items.txt{:>91}", ":31417"),
-                "         IP             REQS  ITEMS▼   LAST   FIRST   HOST",
-                "allowed  203.0.113.7     124  12,400     2s      3d",
-                "blocked  198.51.100.9  1,215     300     2s      3d",
-                "allowed  2001:db8::17      1       0     2s      3d",
+                "         IP            ITEMS▼   REQS   LAST   FIRST   HOST",
+                "allowed  203.0.113.7   12,400    124     2s      3d",
+                "blocked  198.51.100.9     300  1,215     2s      3d",
+                "allowed  2001:db8::17       0      1     2s      3d",
                 "",
                 "",
                 "",
@@ -1469,17 +1469,17 @@ mod tests {
         assert!(test.draw()[1].contains("IP▲"));
 
         test.press(KeyCode::F(6));
-        assert_eq!(
-            (test.view().sort_column, test.view().sort_inverted),
-            (Column::Reqs, false)
-        );
-        test.press(KeyCode::F(6));
         assert_eq!(test.view().sort_column, Column::Items);
         test.press(KeyCode::Char('i'));
         assert_eq!(test.order(), [C, B, A]);
         assert!(test.draw()[1].contains("ITEMS▲"));
         test.press(KeyCode::F(7));
         assert_eq!(test.order(), [A, B, C]);
+        test.press(KeyCode::F(6));
+        assert_eq!(
+            (test.view().sort_column, test.view().sort_inverted),
+            (Column::Reqs, false)
+        );
 
         test.press(KeyCode::Char('s'));
         test.press(KeyCode::Char('i'));
